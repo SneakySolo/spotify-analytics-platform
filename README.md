@@ -10,7 +10,7 @@ This is a synchronous Spring Boot modular monolith. The active application is th
    docker compose up -d redis
    ```
 
-2. Set the required environment variables. Copy `.env.example` into your IDE run configuration or export the values in the shell.
+2. Set the required environment variables. Copy `.env.example` into your IDE run configuration or export the values in the shell. The local Compose database is exposed on port `55432` to avoid collisions with an existing PostgreSQL installation.
 
 3. Point `DATABASE_URL`, `DATABASE_USERNAME`, and `DATABASE_PASSWORD` at PostgreSQL/Supabase. Flyway creates the `spotify_users` table on startup.
 

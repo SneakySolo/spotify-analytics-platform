@@ -1,6 +1,20 @@
-version: '3.8'
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: spotify_analytics
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "55432:5432"
+    networks:
+      - wrap-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d spotify_analytics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     ports:
