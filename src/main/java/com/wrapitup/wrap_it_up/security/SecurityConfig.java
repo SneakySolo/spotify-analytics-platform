@@ -11,7 +11,11 @@ import com.wrapitup.wrap_it_up.auth.OAuthSuccessHandler;
 @Configuration
 public class SecurityConfig {
     private final OAuthSuccessHandler successHandler;
-    public SecurityConfig(OAuthSuccessHandler successHandler) { this.successHandler = successHandler; }
+
+    public SecurityConfig(OAuthSuccessHandler successHandler) {
+        this.successHandler = successHandler;
+    }
+
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http.csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))

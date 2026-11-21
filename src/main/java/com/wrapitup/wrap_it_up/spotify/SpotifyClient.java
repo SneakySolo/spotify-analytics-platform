@@ -52,14 +52,40 @@ public class SpotifyClient {
     private JsonNode get(String token, String path) {
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
-                JsonNode root = rest.get().uri(path).headers(h -> h.setBearerAuth(token)).retrieve().body(JsonNode.class);
-                if (root == null || !root.isObject()) throw new SpotifyException("Spotify returned an invalid response.", false);
+                JsonNode root = rest.get()
+                        .uri(path)
+                        .headers(headers -> headers.setBearerAuth(token))
+                        .retrieve()
+                        .body(JsonNode.class);
+                if (root == null || !root.isObject()) {
+                    throw new SpotifyException(
+                            "Spotify returned an invalid response.", false);
+                }
                 return root;
             } catch (RestClientResponseException ex) {
-                if (ex.getStatusCode().value() != 429 || attempt == 2) throw new SpotifyException("Spotify is temporarily unavailable. Please try again.", true, ex);
-                try { Thread.sleep(200L * (attempt + 1)); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new SpotifyException("Spotify request was interrupted.", true, interrupted); }
-            } catch (SpotifyException ex) { throw ex;
-            } catch (Exception ex) { throw new SpotifyException("Spotify is temporarily unavailable. Please try again.", true, ex); }
+                if (ex.getStatusCode().value() != 429 || attempt == 2) {
+                    throw new SpotifyException(
+                            "Spotify is temporarily unavailable. Please try again.",
+                            true,
+                            ex);
+                }
+                try {
+                    Thread.sleep(200L * (attempt + 1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new SpotifyException(
+                            "Spotify request was interrupted.",
+                            true,
+                            interrupted);
+                }
+            } catch (SpotifyException ex) {
+                throw ex;
+            } catch (Exception ex) {
+                throw new SpotifyException(
+                        "Spotify is temporarily unavailable. Please try again.",
+                        true,
+                        ex);
+            }
         }
         throw new SpotifyException("Spotify is temporarily unavailable. Please try again.", true);
     }
