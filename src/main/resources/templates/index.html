@@ -30,6 +30,16 @@
 <script>
     const generateButton = document.querySelector("#generate");
     const result = document.querySelector("#result");
+    const query = new URLSearchParams(window.location.search);
+    const oauthError = query.get("oauth_error");
+
+    if (oauthError) {
+        result.hidden = false;
+        result.innerHTML = "<h2>Spotify login failed</h2>"
+            + "<p>Spotify did not complete the connection.</p>"
+            + "<p>Error: " + oauthError + "</p>"
+            + "<p>Check the Client ID, Client Secret, and exact redirect URI.</p>";
+    }
 
     function csrfToken() {
         const cookie = document.cookie
@@ -55,18 +65,21 @@
                 "X-XSRF-TOKEN": csrfToken()
             }
         });
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
 
         result.hidden = false;
-        result.innerHTML = data.code
-            ? "<p>" + data.message + "</p>"
-            : "<h2>" + (data.topArtist?.name || "Your mix") + "</h2>"
+        if (!response.ok || data.code) {
+            result.innerHTML = "<h2>Could not generate your wrap</h2>"
+                + "<p>" + (data.message || "Please connect Spotify again and retry.") + "</p>";
+        } else {
+            result.innerHTML = "<h2>" + (data.topArtist?.name || "Your mix") + "</h2>"
                 + "<p>Recently spent about "
-                + data.recentListeningMinutes
+                + (data.recentListeningMinutes ?? 0)
                 + " minutes listening.</p>"
-                + "<p>Top genre: " + data.topGenre + "</p>"
-                + "<p>" + data.personality?.title + ": "
-                + data.personality?.description + "</p>";
+                + "<p>Top genre: " + (data.topGenre || "Unknown") + "</p>"
+                + "<p>" + (data.personality?.title || "Your listening style") + ": "
+                + (data.personality?.description || "Your listening has its own rhythm.") + "</p>";
+        }
         generateButton.textContent = "Generate again";
         generateButton.disabled = false;
     };
