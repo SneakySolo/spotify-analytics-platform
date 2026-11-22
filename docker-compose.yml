@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - "55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     networks:
       - wrap-network
     healthcheck:
@@ -30,3 +32,6 @@ services:
 networks:
   wrap-network:
     driver: bridge
+
+volumes:
+  postgres-data:
