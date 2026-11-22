@@ -6,11 +6,13 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import lombok.Getter;
 
 import java.time.Instant;
 
 @Entity
 @Table(name = "spotify_users")
+@Getter
 public class SpotifyConnection {
 
     @Id
@@ -66,30 +68,6 @@ public class SpotifyConnection {
     @PreUpdate
     void updated() {
         updatedAt = Instant.now();
-    }
-
-    public String getSpotifyUserId() {
-        return spotifyUserId;
-    }
-
-    public String getDisplayName() {
-        return displayName;
-    }
-
-    public String getAccessTokenCiphertext() {
-        return accessTokenCiphertext;
-    }
-
-    public String getRefreshTokenCiphertext() {
-        return refreshTokenCiphertext;
-    }
-
-    public Instant getAccessTokenExpiresAt() {
-        return accessTokenExpiresAt;
-    }
-
-    public String getConnectionStatus() {
-        return connectionStatus;
     }
 
     public void updateTokens(

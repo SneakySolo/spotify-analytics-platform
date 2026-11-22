@@ -1,5 +1,75 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Spotify Wrap</title><link rel="stylesheet" href="/css/app.css"></head>
-<body><main class="shell"><p class="eyebrow">SPOTIFY WRAP</p><h1>Hello there.<br>Your Wrapped is ready...<br>but are you?</h1><p class="intro">A personal snapshot of the music you have been living with lately.</p>
-<a class="button" href="/oauth2/authorization/spotify">Connect Spotify</a><button class="button" id="generate" hidden>Generate My Wrap</button><section id="result" hidden></section></main>
-<script>const g=document.querySelector('#generate'),r=document.querySelector('#result');const csrf=()=>document.cookie.split('; ').find(x=>x.startsWith('XSRF-TOKEN='))?.split('=')[1];fetch('/api/me').then(x=>{if(x.ok){g.hidden=false;document.querySelector('a').hidden=true}});g.onclick=async()=>{g.disabled=true;g.textContent='Listening...';const x=await fetch('/wraps',{method:'POST',headers:{'X-XSRF-TOKEN':decodeURIComponent(csrf()||'')}});const d=await x.json();r.hidden=false;r.innerHTML=d.code?`<p>${d.message}</p>`:`<h2>${d.topArtist?.name||'Your mix'}</h2><p>Recently spent about ${d.recentListeningMinutes} minutes listening.</p><p>Top genre: ${d.topGenre}</p><p>${d.personality?.title}: ${d.personality?.description}</p>`;g.textContent='Generate again'};</script></body></html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Spotify Wrap</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main class="shell">
+    <p class="eyebrow">SPOTIFY WRAP</p>
+    <h1>
+        Hello there.<br>
+        Your Wrapped is ready...<br>
+        but are you?
+    </h1>
+    <p class="intro">
+        A personal snapshot of the music you have been living with lately.
+    </p>
+
+    <a class="button" href="/oauth2/authorization/spotify">
+        Connect Spotify
+    </a>
+    <button class="button" id="generate" hidden>
+        Generate My Wrap
+    </button>
+    <section id="result" hidden></section>
+</main>
+
+<script>
+    const generateButton = document.querySelector("#generate");
+    const result = document.querySelector("#result");
+
+    function csrfToken() {
+        const cookie = document.cookie
+            .split("; ")
+            .find(value => value.startsWith("XSRF-TOKEN="));
+        return cookie ? decodeURIComponent(cookie.split("=")[1]) : "";
+    }
+
+    fetch("/api/me").then(response => {
+        if (response.ok) {
+            generateButton.hidden = false;
+            document.querySelector("a").hidden = true;
+        }
+    });
+
+    generateButton.onclick = async () => {
+        generateButton.disabled = true;
+        generateButton.textContent = "Listening...";
+
+        const response = await fetch("/wraps", {
+            method: "POST",
+            headers: {
+                "X-XSRF-TOKEN": csrfToken()
+            }
+        });
+        const data = await response.json();
+
+        result.hidden = false;
+        result.innerHTML = data.code
+            ? "<p>" + data.message + "</p>"
+            : "<h2>" + (data.topArtist?.name || "Your mix") + "</h2>"
+                + "<p>Recently spent about "
+                + data.recentListeningMinutes
+                + " minutes listening.</p>"
+                + "<p>Top genre: " + data.topGenre + "</p>"
+                + "<p>" + data.personality?.title + ": "
+                + data.personality?.description + "</p>";
+        generateButton.textContent = "Generate again";
+        generateButton.disabled = false;
+    };
+</script>
+</body>
+</html>

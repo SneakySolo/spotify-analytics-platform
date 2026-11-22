@@ -106,8 +106,16 @@ public class SpotifyClient {
 
     public static class SpotifyException extends RuntimeException {
         private final boolean retryable;
-        public SpotifyException(String message, boolean retryable) { super(message); this.retryable = retryable; }
-        public SpotifyException(String message, boolean retryable, Throwable cause) { super(message, cause); this.retryable = retryable; }
-        public boolean retryable() { return retryable; }
+
+        public SpotifyException(String message, boolean retryable) {
+            super(message); this.retryable = retryable;
+        }
+        public SpotifyException(String message, boolean retryable, Throwable cause) {
+            super(message, cause); this.retryable = retryable;
+        }
+
+        public boolean retryable() {
+            return retryable;
+        }
     }
 }
