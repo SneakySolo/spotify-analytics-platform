@@ -28,6 +28,14 @@
 </main>
 
 <script>
+    if (window.location.hostname === "localhost") {
+        window.location.replace(
+            "http://127.0.0.1:"
+            + window.location.port
+            + window.location.pathname
+            + window.location.search);
+    }
+
     const generateButton = document.querySelector("#generate");
     const result = document.querySelector("#result");
     const query = new URLSearchParams(window.location.search);
@@ -41,11 +49,12 @@
             + "<p>Check the Client ID, Client Secret, and exact redirect URI.</p>";
     }
 
-    function csrfToken() {
-        const cookie = document.cookie
-            .split("; ")
-            .find(value => value.startsWith("XSRF-TOKEN="));
-        return cookie ? decodeURIComponent(cookie.split("=")[1]) : "";
+    async function csrfHeaders() {
+        const response = await fetch("/api/csrf");
+        const token = await response.json();
+        return {
+            [token.headerName]: token.token
+        };
     }
 
     fetch("/api/me").then(async response => {
@@ -60,11 +69,10 @@
         generateButton.disabled = true;
         generateButton.textContent = "Listening...";
 
+        const headers = await csrfHeaders();
         const response = await fetch("/wraps", {
             method: "POST",
-            headers: {
-                "X-XSRF-TOKEN": csrfToken()
-            }
+            headers
         });
         const data = await response.json().catch(() => ({}));
 
@@ -74,6 +82,9 @@
                 + "<p>Please connect Spotify before generating your wrap.</p>";
             generateButton.hidden = true;
             document.querySelector("a").hidden = false;
+        } else if (response.status === 403) {
+            result.innerHTML = "<h2>Security check failed</h2>"
+                + "<p>Refresh the page and try again.</p>";
         } else if (!response.ok || data.code) {
             result.innerHTML = "<h2>Could not generate your wrap</h2>"
                 + "<p>" + (data.message || "Please connect Spotify again and retry.") + "</p>";

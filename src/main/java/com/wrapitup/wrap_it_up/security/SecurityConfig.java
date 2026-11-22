@@ -28,6 +28,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/",
                                 "/api/me",
+                                "/api/csrf",
                                 "/css/**",
                                 "/js/**",
                                 "/actuator/health",
