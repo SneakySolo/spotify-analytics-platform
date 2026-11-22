@@ -57,6 +57,70 @@
         };
     }
 
+    function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>\"']/g, character => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#039;"
+        })[character]);
+    }
+
+    function percentage(value) {
+        return Math.round((value || 0) * 100) + "%";
+    }
+
+    function trackList(tracks) {
+        if (!Array.isArray(tracks) || tracks.length === 0) {
+            return "<p class=\"muted\">Spotify did not return enough track history yet.</p>";
+        }
+
+        return "<ol class=\"track-list\">" + tracks.map(track =>
+            "<li>"
+                + "<span class=\"track-title\">" + escapeHtml(track.name) + "</span>"
+                + "<span class=\"track-artist\">" + escapeHtml(track.artist?.name) + "</span>"
+                + "</li>").join("")
+            + "</ol>";
+    }
+
+    function renderWrap(data) {
+        const topArtist = data.topArtist?.name || "Your mix";
+        const artistImage = data.topArtist?.imageUrl;
+        const topAlbum = data.topAlbum?.name || "No album data yet";
+        const risingStar = data.risingStar?.name || "Still finding one";
+
+        return "<div class=\"wrap-hero\">"
+            + (artistImage
+                ? "<img class=\"artist-image\" src=\"" + escapeHtml(artistImage) + "\" alt=\"\">"
+                : "")
+            + "<div><p class=\"eyebrow\">YOUR TOP ARTIST</p>"
+            + "<h2>" + escapeHtml(topArtist) + "</h2>"
+            + "<p>" + escapeHtml(data.personality?.title || "Your listening style")
+            + ": " + escapeHtml(data.personality?.description
+                || "Your listening has its own rhythm.") + "</p></div></div>"
+            + "<div class=\"metric-grid\">"
+            + "<article class=\"metric\"><span>Recent listening</span><strong>"
+            + (data.recentListeningMinutes ?? 0) + " min</strong></article>"
+            + "<article class=\"metric\"><span>Top genre</span><strong>"
+            + escapeHtml(data.topGenre || "Unknown") + "</strong></article>"
+            + "<article class=\"metric\"><span>Artist loyalty</span><strong>"
+            + percentage(data.artistLoyalty) + "</strong></article>"
+            + "<article class=\"metric\"><span>Discovery</span><strong>"
+            + percentage(data.discoveryRatio) + "</strong></article>"
+            + "</div>"
+            + "<div class=\"detail-grid\">"
+            + "<article class=\"detail-card\"><p class=\"eyebrow\">TOP ALBUM</p><h3>"
+            + escapeHtml(topAlbum) + "</h3><p>Album focus: "
+            + percentage(data.albumConcentration) + "</p></article>"
+            + "<article class=\"detail-card\"><p class=\"eyebrow\">RISING STAR</p><h3>"
+            + escapeHtml(risingStar) + "</h3><p>Genre diversity: "
+            + percentage(data.genreDiversity) + "</p></article>"
+            + "</div>"
+            + "<section class=\"tracks\"><p class=\"eyebrow\">TOP TRACKS</p><h3>"
+            + "Your repeat rotation</h3>" + trackList(data.topTracks) + "</section>";
+    }
+
     fetch("/api/me").then(async response => {
         const account = await response.json().catch(() => ({}));
         if (response.ok && account.authenticated) {
@@ -89,13 +153,7 @@
             result.innerHTML = "<h2>Could not generate your wrap</h2>"
                 + "<p>" + (data.message || "Please connect Spotify again and retry.") + "</p>";
         } else {
-            result.innerHTML = "<h2>" + (data.topArtist?.name || "Your mix") + "</h2>"
-                + "<p>Recently spent about "
-                + (data.recentListeningMinutes ?? 0)
-                + " minutes listening.</p>"
-                + "<p>Top genre: " + (data.topGenre || "Unknown") + "</p>"
-                + "<p>" + (data.personality?.title || "Your listening style") + ": "
-                + (data.personality?.description || "Your listening has its own rhythm.") + "</p>";
+            result.innerHTML = renderWrap(data);
         }
         generateButton.textContent = "Generate again";
         generateButton.disabled = false;
