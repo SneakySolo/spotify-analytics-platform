@@ -48,8 +48,9 @@
         return cookie ? decodeURIComponent(cookie.split("=")[1]) : "";
     }
 
-    fetch("/api/me").then(response => {
-        if (response.ok) {
+    fetch("/api/me").then(async response => {
+        const account = await response.json().catch(() => ({}));
+        if (response.ok && account.authenticated) {
             generateButton.hidden = false;
             document.querySelector("a").hidden = true;
         }
@@ -68,7 +69,12 @@
         const data = await response.json().catch(() => ({}));
 
         result.hidden = false;
-        if (!response.ok || data.code) {
+        if (response.status === 401 || data.code === "reauth_required") {
+            result.innerHTML = "<h2>Spotify is not connected</h2>"
+                + "<p>Please connect Spotify before generating your wrap.</p>";
+            generateButton.hidden = true;
+            document.querySelector("a").hidden = false;
+        } else if (!response.ok || data.code) {
             result.innerHTML = "<h2>Could not generate your wrap</h2>"
                 + "<p>" + (data.message || "Please connect Spotify again and retry.") + "</p>";
         } else {

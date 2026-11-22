@@ -25,7 +25,15 @@ public class SecurityConfig {
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http.csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/", "/css/**", "/js/**", "/actuator/health", "/oauth2/**", "/login/**").permitAll()
+                        .requestMatchers(
+                                "/",
+                                "/api/me",
+                                "/css/**",
+                                "/js/**",
+                                "/actuator/health",
+                                "/oauth2/**",
+                                "/login/**")
+                        .permitAll()
                         .anyRequest().authenticated())
                 .oauth2Login(oauth -> oauth
                         .successHandler(successHandler)
