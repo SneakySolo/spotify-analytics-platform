@@ -3,161 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Spotify Wrap</title>
+    <title>Your Spotify Wrap</title>
     <link rel="stylesheet" href="/css/app.css">
 </head>
-<body>
-<main class="shell">
-    <p class="eyebrow">SPOTIFY WRAP</p>
-    <h1>
-        Hello there.<br>
-        Your Wrapped is ready...<br>
-        but are you?
-    </h1>
-    <p class="intro">
-        A personal snapshot of the music you have been living with lately.
-    </p>
-
-    <a class="button" href="/oauth2/authorization/spotify">
-        Connect Spotify
-    </a>
-    <button class="button" id="generate" hidden>
-        Generate My Wrap
-    </button>
-    <section id="result" hidden></section>
+<body class="home-page">
+<main class="home-shell">
+    <div class="home-copy">
+        <p class="eyebrow">SPOTIFY WRAP <span class="dot">•</span></p>
+        <h1>Your music,<br><em>beautifully told.</em></h1>
+        <p class="intro">The artists, songs, and moods that made your listening yours. Connect Spotify and let your story unfold.</p>
+        <button class="button button-large" id="start-wrap">Reveal my wrap <span aria-hidden="true">↗</span></button>
+        <p class="microcopy">Secure Spotify connection · Takes less than a minute</p>
+    </div>
+    <div class="home-art" aria-hidden="true">
+        <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+        <div class="art-card art-card-back">YOUR<br>VIBE</div><div class="art-card art-card-front">LISTEN<br><span>LOUDER</span></div>
+        <span class="art-star star-one">✦</span><span class="art-star star-two">✦</span>
+    </div>
 </main>
-
 <script>
-    if (window.location.hostname === "localhost") {
-        window.location.replace(
-            "http://127.0.0.1:"
-            + window.location.port
-            + window.location.pathname
-            + window.location.search);
-    }
-
-    const generateButton = document.querySelector("#generate");
-    const result = document.querySelector("#result");
-    const query = new URLSearchParams(window.location.search);
-    const oauthError = query.get("oauth_error");
-
-    if (oauthError) {
-        result.hidden = false;
-        result.innerHTML = "<h2>Spotify login failed</h2>"
-            + "<p>Spotify did not complete the connection.</p>"
-            + "<p>Error: " + oauthError + "</p>"
-            + "<p>Check the Client ID, Client Secret, and exact redirect URI.</p>";
-    }
-
-    async function csrfHeaders() {
-        const response = await fetch("/api/csrf");
-        const token = await response.json();
-        return {
-            [token.headerName]: token.token
-        };
-    }
-
-    function escapeHtml(value) {
-        return String(value ?? "").replace(/[&<>\"']/g, character => ({
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            "\"": "&quot;",
-            "'": "&#039;"
-        })[character]);
-    }
-
-    function percentage(value) {
-        return Math.round((value || 0) * 100) + "%";
-    }
-
-    function trackList(tracks) {
-        if (!Array.isArray(tracks) || tracks.length === 0) {
-            return "<p class=\"muted\">Spotify did not return enough track history yet.</p>";
-        }
-
-        return "<ol class=\"track-list\">" + tracks.map(track =>
-            "<li>"
-                + "<span class=\"track-title\">" + escapeHtml(track.name) + "</span>"
-                + "<span class=\"track-artist\">" + escapeHtml(track.artist?.name) + "</span>"
-                + "</li>").join("")
-            + "</ol>";
-    }
-
-    function renderWrap(data) {
-        const topArtist = data.topArtist?.name || "Your mix";
-        const artistImage = data.topArtist?.imageUrl;
-        const topAlbum = data.topAlbum?.name || "No album data yet";
-        const risingStar = data.risingStar?.name || "Still finding one";
-
-        return "<div class=\"wrap-hero\">"
-            + (artistImage
-                ? "<img class=\"artist-image\" src=\"" + escapeHtml(artistImage) + "\" alt=\"\">"
-                : "")
-            + "<div><p class=\"eyebrow\">YOUR TOP ARTIST</p>"
-            + "<h2>" + escapeHtml(topArtist) + "</h2>"
-            + "<p>" + escapeHtml(data.personality?.title || "Your listening style")
-            + ": " + escapeHtml(data.personality?.description
-                || "Your listening has its own rhythm.") + "</p></div></div>"
-            + "<div class=\"metric-grid\">"
-            + "<article class=\"metric\"><span>Recent listening</span><strong>"
-            + (data.recentListeningMinutes ?? 0) + " min</strong></article>"
-            + "<article class=\"metric\"><span>Top genre</span><strong>"
-            + escapeHtml(data.topGenre || "Unknown") + "</strong></article>"
-            + "<article class=\"metric\"><span>Artist loyalty</span><strong>"
-            + percentage(data.artistLoyalty) + "</strong></article>"
-            + "<article class=\"metric\"><span>Discovery</span><strong>"
-            + percentage(data.discoveryRatio) + "</strong></article>"
-            + "</div>"
-            + "<div class=\"detail-grid\">"
-            + "<article class=\"detail-card\"><p class=\"eyebrow\">TOP ALBUM</p><h3>"
-            + escapeHtml(topAlbum) + "</h3><p>Album focus: "
-            + percentage(data.albumConcentration) + "</p></article>"
-            + "<article class=\"detail-card\"><p class=\"eyebrow\">RISING STAR</p><h3>"
-            + escapeHtml(risingStar) + "</h3><p>Genre diversity: "
-            + percentage(data.genreDiversity) + "</p></article>"
-            + "</div>"
-            + "<section class=\"tracks\"><p class=\"eyebrow\">TOP TRACKS</p><h3>"
-            + "Your repeat rotation</h3>" + trackList(data.topTracks) + "</section>";
-    }
-
-    fetch("/api/me").then(async response => {
-        const account = await response.json().catch(() => ({}));
-        if (response.ok && account.authenticated) {
-            generateButton.hidden = false;
-            document.querySelector("a").hidden = true;
-        }
+    if (window.location.hostname === "localhost") window.location.replace("http://127.0.0.1:" + window.location.port + window.location.pathname + window.location.search);
+    const start = document.querySelector("#start-wrap");
+    start.addEventListener("click", async () => {
+        start.disabled = true; start.innerHTML = "Getting things ready <span aria-hidden=\"true\">…</span>";
+        try { const response = await fetch("/api/me"); const account = await response.json().catch(() => ({})); window.location.href = response.ok && account.authenticated ? "/wrap?autogenerate=1" : "/oauth2/authorization/spotify"; }
+        catch (error) { window.location.href = "/oauth2/authorization/spotify"; }
     });
-
-    generateButton.onclick = async () => {
-        generateButton.disabled = true;
-        generateButton.textContent = "Listening...";
-
-        const headers = await csrfHeaders();
-        const response = await fetch("/wraps", {
-            method: "POST",
-            headers
-        });
-        const data = await response.json().catch(() => ({}));
-
-        result.hidden = false;
-        if (response.status === 401 || data.code === "reauth_required") {
-            result.innerHTML = "<h2>Spotify is not connected</h2>"
-                + "<p>Please connect Spotify before generating your wrap.</p>";
-            generateButton.hidden = true;
-            document.querySelector("a").hidden = false;
-        } else if (response.status === 403) {
-            result.innerHTML = "<h2>Security check failed</h2>"
-                + "<p>Refresh the page and try again.</p>";
-        } else if (!response.ok || data.code) {
-            result.innerHTML = "<h2>Could not generate your wrap</h2>"
-                + "<p>" + (data.message || "Please connect Spotify again and retry.") + "</p>";
-        } else {
-            result.innerHTML = renderWrap(data);
-        }
-        generateButton.textContent = "Generate again";
-        generateButton.disabled = false;
-    };
 </script>
 </body>
 </html>

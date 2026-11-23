@@ -27,6 +27,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/",
+                                "/wrap",
                                 "/api/me",
                                 "/api/csrf",
                                 "/css/**",

@@ -27,7 +27,7 @@ public class OAuthFailureHandler implements AuthenticationFailureHandler {
             errorCode = oauthException.getError().getErrorCode();
         }
 
-        response.sendRedirect("/?oauth_error="
+        response.sendRedirect("/wrap?oauth_error="
                 + URLEncoder.encode(errorCode, StandardCharsets.UTF_8));
     }
 }
