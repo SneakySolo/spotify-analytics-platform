@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Your Spotify Wrap</title><link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="wrap-page">
+<main class="wrap-shell">
+    <nav class="wrap-nav"><a class="back-link" href="/">← Back home</a><span>SPOTIFY WRAP <span class="dot">•</span></span></nav>
+    <section id="loading" class="loading-state"><p class="eyebrow">YOUR PERSONAL LISTENING STORY</p><h1>Gathering your<br><em>good noise…</em></h1><div class="loader"></div></section>
+    <section id="result" hidden></section>
+</main>
+<script>
+    const result = document.querySelector("#result"), loading = document.querySelector("#loading"), query = new URLSearchParams(window.location.search);
+    function escapeHtml(value) { return String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"})[character]); }
+    function percentage(value) { return Math.round((value || 0) * 100) + "%"; }
+    function valueClass(value) { const length = String(value ?? "").length; return length > 28 ? "stat-value extra-long-value" : length > 16 ? "stat-value long-value" : "stat-value"; }
+    function trackList(tracks) {
+        if (!Array.isArray(tracks) || tracks.length === 0) return "<p class=\"muted\">Spotify did not return enough track history yet.</p>";
+        return "<ol class=\"track-list\">" + tracks.slice(0, 5).map((track, index) => "<li>" + (track.imageUrl ? "<img src=\"" + escapeHtml(track.imageUrl) + "\" alt=\"\">" : "") + "<span class=\"track-number\">" + String(index + 1).padStart(2,"0") + "</span><span><strong>" + escapeHtml(track.name) + "</strong><small>" + escapeHtml(track.artist?.name) + "</small></span></li>").join("") + "</ol>";
+    }
+    function statCard(label, value, caption, imageUrl) {
+        return `<div class="stat-card">${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="" onerror="this.style.display='none'">` : ""}<div><p class="card-label">${label}</p><strong class="${valueClass(value)}">${escapeHtml(value)}</strong><p class="stat-caption">${caption}</p></div></div>`;
+    }
+    function renderWrap(data) {
+        const artist = data.topArtist?.name || "Your mix", image = data.topArtist?.imageUrl;
+        const album = data.topAlbum, rising = data.risingStar, genre = data.topGenre || "Mixed";
+        const cover = album?.imageUrl || image, risingImage = rising?.imageUrl || image;
+        const discoveryImage = rising?.imageUrl || data.topTracks?.find(track => track.artist?.imageUrl)?.artist?.imageUrl || cover;
+        const personalityTitle = data.personality?.title || "Your listening style";
+        const personalityDescription = data.personality?.description || "Your listening has its own rhythm.";
+        const cards = [
+            `<div class="story-card active"><div class="story-number">01 / 12</div><div class="stat-card artist-stat">${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(artist)}">` : "<div class=\"image-placeholder\">✦</div>"}<div><p class="card-label">TOP ARTIST</p><strong class="${valueClass(artist)}">${escapeHtml(artist)}</strong><p class="personality">${escapeHtml(personalityTitle)}</p><p>${escapeHtml(personalityDescription)}</p></div></div></div>`,
+            `<div class="story-card"><div class="story-number">02 / 12</div>${statCard("TOTAL MINUTES", (data.recentListeningMinutes ?? 0) + " minutes", "of music recently played", cover)}</div>`,
+            `<div class="story-card"><div class="story-number">03 / 12</div>${statCard("FAVOURITE GENRE", genre, "the sound that kept finding you", null)}</div>`,
+            `<div class="story-card"><div class="story-number">04 / 12</div>${statCard("ARTIST LOYALTY", percentage(data.artistLoyalty), "you know exactly what you like", image)}</div>`,
+            `<div class="story-card"><div class="story-number">05 / 12</div>${statCard("GENRE DIVERSITY", percentage(data.genreDiversity), "how widely your listening moves", null)}</div>`,
+            `<div class="story-card"><div class="story-number">06 / 12</div>${statCard("FAMILIARITY", percentage(data.familiarityRatio), "sounds that already feel like home", image)}</div>`,
+            `<div class="story-card"><div class="story-number">07 / 12</div>${statCard("DISCOVERY RATE", percentage(data.discoveryRatio), "new sounds found along the way", discoveryImage)}</div>`,
+            `<div class="story-card"><div class="story-number">08 / 12</div>${statCard("TOP ALBUM", album?.name || "No album data yet", "album focus: " + percentage(data.albumConcentration), cover)}</div>`,
+            `<div class="story-card"><div class="story-number">09 / 12</div>${statCard("ALBUM CONCENTRATION", percentage(data.albumConcentration), "how much one album stayed with you", cover)}</div>`,
+            `<div class="story-card"><div class="story-number">10 / 12</div>${statCard("RISING STAR", rising?.name || "Still finding one", "the artist moving up your rotation", risingImage)}</div>`,
+            `<div class="story-card"><div class="story-number">11 / 12</div>${statCard("YOUR PERSONALITY", personalityTitle, personalityDescription, cover)}</div>`,
+            `<div class="story-card track-story"><div class="story-number">12 / 12</div><div class="story-card-content"><p class="card-label">TOP TRACKS</p><h2>Your repeat<br><em>rotation.</em></h2>${trackList(data.topTracks)}</div></div>`
+        ];
+        return `<div class="carousel-heading"><p class="eyebrow">YOUR PERSONAL LISTENING STORY</p><h1>Your music,<br><em>in full colour.</em></h1><p class="wrap-lede">Use the arrows to move through your story.</p></div><div class="carousel" aria-live="polite">${cards.join("")}</div><div class="carousel-controls"><button class="arrow-button" id="previous" aria-label="Previous card">←</button><div class="progress-dots" aria-label="Wrap progress">${cards.map((_, index) => `<span class="${index === 0 ? "current" : ""}"></span>`).join("")}</div><button class="arrow-button" id="next" aria-label="Next card">→</button></div>`;
+    }
+    function activateCarousel() {
+        const cards = [...document.querySelectorAll(".story-card")], dots = [...document.querySelectorAll(".progress-dots span")], previous = document.querySelector("#previous"), next = document.querySelector("#next"); let index = 0;
+        function show(nextIndex) { index = (nextIndex + cards.length) % cards.length; cards.forEach((card, i) => card.classList.toggle("active", i === index)); dots.forEach((dot, i) => dot.classList.toggle("current", i === index)); previous.disabled = index === 0; next.disabled = index === cards.length - 1; }
+        previous.onclick = () => show(index - 1); next.onclick = () => show(index + 1); show(0);
+    }
+    async function csrfHeaders() { const response = await fetch("/api/csrf"); const token = await response.json(); return {[token.headerName]: token.token}; }
+    async function generate() {
+        try { const response = await fetch("/wraps", {method:"POST", headers: await csrfHeaders()}); const data = await response.json().catch(() => ({})); if (response.status === 401 || data.code === "reauth_required") throw new Error("Spotify needs to be connected again. <a href='/oauth2/authorization/spotify'>Reconnect Spotify</a>"); if (!response.ok || data.code) throw new Error(data.message || "We could not generate your wrap."); loading.hidden = true; result.hidden = false; result.innerHTML = renderWrap(data); activateCarousel(); }
+        catch (error) { loading.innerHTML = `<p class="eyebrow">A SMALL DETOUR</p><h1>We couldn't find<br><em>your wrap.</em></h1><p class="error-copy">${error.message}</p><a class="button" href="/">Back home</a>`; }
+    }
+    if (query.get("oauth_error")) loading.innerHTML = "<p class='eyebrow'>SPOTIFY CONNECTION</p><h1>Spotify needs<br><em>one more step.</em></h1><p class='error-copy'>This app is currently in Spotify development mode. Add this Spotify account under your app's <strong>Users and Access</strong> / allowlist in the Spotify Developer Dashboard, then try again.</p><a class='button' href='/'>Try again <span>↗</span></a>"; else generate();
+</script>
+</body>
+</html>

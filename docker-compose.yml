@@ -7,8 +7,10 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - "55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     networks:
-      - wrap-network
+      - spotify-analytics-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d spotify_analytics"]
       interval: 5s
@@ -21,12 +23,15 @@ services:
       - "6379:6379"
     command: redis-server --save "" --appendonly no --maxmemory-policy volatile-ttl
     networks:
-      - wrap-network
+      - spotify-analytics-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 networks:
-  wrap-network:
+  spotify-analytics-network:
     driver: bridge
+
+volumes:
+  postgres-data:
