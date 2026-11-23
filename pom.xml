@@ -5,8 +5,8 @@
          http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
-	<groupId>com.wrapitup</groupId>
-	<artifactId>wrap-it-up</artifactId>
+	<groupId>com.spotifyanalytics</groupId>
+	<artifactId>spotify-analytics-platform</artifactId>
 	<version>1.0.0</version>
     <packaging>jar</packaging>
 

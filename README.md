@@ -1,6 +1,6 @@
 # Spotify Analytics Platform V2
 
-This is a synchronous Spring Boot modular monolith. The active application is the root Maven project; the old service directories are preserved as legacy files but are not included in the root build.
+This is a synchronous Spring Boot modular monolith for generating Spotify listening analytics.
 
 ## Run locally
 
@@ -33,7 +33,7 @@ This is a synchronous Spring Boot modular monolith. The active application is th
    ./mvnw spring-boot:run
    ```
 
-Open `http://127.0.0.1:8080`, connect Spotify, and click **Generate My Wrap**. Generation is synchronous: the endpoint reads a user-specific Redis cache first, fetches Spotify data on a miss, calculates the analytics, caches the JSON for 15 minutes, and returns the result.
+Open `http://127.0.0.1:8080`, connect Spotify, and click **Generate My Wrap**. Generation is synchronous: the endpoint reads a user-specific Redis cache first, fetches Spotify data on a miss, calculates the analytics, caches the JSON for the configured TTL (15 minutes by default), and returns the result. Reloading the page still makes one request to the application, but a valid Redis entry prevents the Spotify APIs from being called again.
 
 ## Verification
 
