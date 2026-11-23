@@ -9,4 +9,9 @@ public class PageController {
     public String home() {
         return "index";
     }
+
+    @GetMapping("/wrap")
+    public String wrap() {
+        return "wrap";
+    }
 }

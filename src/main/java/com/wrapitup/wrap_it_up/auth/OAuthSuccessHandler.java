@@ -65,6 +65,6 @@ public class OAuthSuccessHandler implements AuthenticationSuccessHandler {
             repository.save(connection);
         }
 
-        response.sendRedirect("/");
+        response.sendRedirect("/wrap?autogenerate=1");
     }
 }

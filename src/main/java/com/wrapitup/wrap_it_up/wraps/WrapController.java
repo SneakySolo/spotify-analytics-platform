@@ -3,6 +3,7 @@ package com.wrapitup.wrap_it_up.wraps;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wrapitup.wrap_it_up.analytics.AnalyticsService;
 import com.wrapitup.wrap_it_up.analytics.WrapResult;
+import com.wrapitup.wrap_it_up.auth.SpotifyTokenService;
 import com.wrapitup.wrap_it_up.spotify.SpotifyClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +11,7 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authentic
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/wraps")
@@ -33,10 +35,29 @@ public class WrapController {
             String cached = redis.opsForValue().get(key);
             if (cached != null) return ResponseEntity.ok(mapper.readValue(cached, WrapResult.class));
         } catch (Exception ignored) { /* Redis is an optional cache: continue on failure. */ }
-        WrapResult result = analytics.analyze(spotify.fetch(authentication));
         try {
-            redis.opsForValue().set(key, mapper.writeValueAsString(result), Duration.ofMinutes(15));
-        } catch (Exception ignored) { /* A cache failure must not fail generation. */ }
-        return ResponseEntity.ok(result);
+            WrapResult result = analytics.analyze(spotify.fetch(authentication));
+            try {
+                redis.opsForValue().set(
+                        key,
+                        mapper.writeValueAsString(result),
+                        Duration.ofMinutes(15));
+            } catch (Exception ignored) {
+                /* A cache failure must not fail generation. */
+            }
+            return ResponseEntity.ok(result);
+        } catch (SpotifyTokenService.ReauthRequiredException exception) {
+            return ResponseEntity.status(401).body(Map.of(
+                    "code", "reauth_required",
+                    "message", exception.getMessage()));
+        } catch (SpotifyClient.SpotifyException exception) {
+            return ResponseEntity.status(502).body(Map.of(
+                    "code", "spotify_error",
+                    "message", exception.getMessage()));
+        } catch (Exception exception) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "code", "generation_failed",
+                    "message", "We could not generate your wrap. Please try again."));
+        }
     }
 }
