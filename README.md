@@ -58,3 +58,23 @@ The named `postgres-data` volume keeps the local database across container resta
 The test suite covers application startup, AES-256-GCM token round trips with unique nonces, genre normalization, rankings, recent listening minutes, album selection, and personality output.
 
 Required production variables are `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`, `DATABASE_URL`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `REDIS_URL`, and a base64-encoded 32-byte `TOKEN_ENCRYPTION_KEY`.
+
+## Deploy on Render
+
+Create a Render Web Service from this repository and choose the Docker runtime. Render will build the root `Dockerfile` and run the image on the port supplied by `PORT`.
+
+Set the health check path to `/actuator/health` and configure these environment variables in Render:
+
+- `SPOTIFY_CLIENT_ID`
+- `SPOTIFY_CLIENT_SECRET`
+- `SPOTIFY_REDIRECT_URI` (for example, `https://your-service.onrender.com/login/oauth2/code/spotify`)
+- `TOKEN_ENCRYPTION_KEY` (base64-encoded 32-byte key)
+- `DATABASE_URL` (JDBC PostgreSQL URL from Supabase)
+- `DATABASE_USERNAME`
+- `DATABASE_PASSWORD`
+- `REDIS_URL` (the Render Key Value internal Redis URL)
+- `THYMELEAF_CACHE=true`
+
+Register the exact value of `SPOTIFY_REDIRECT_URI` in the Spotify Developer Dashboard. Use Supabase's Session Pooler connection details when Render cannot reach the direct IPv6 database endpoint; the JDBC URL must use the `jdbc:postgresql://` format.
+
+The free Render web service can sleep after inactivity, so the first request after idle may be slow. Redis is only a cache: losing it after a restart is expected and causes Wraps to be regenerated.

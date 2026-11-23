@@ -8,14 +8,20 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import jakarta.annotation.PreDestroy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 @Service
 public class SpotifyClient {
     private final SpotifyTokenService tokens;
     private final ObjectMapper mapper;
     private final RestClient rest = RestClient.builder().baseUrl("https://api.spotify.com/v1").build();
+    private final ExecutorService fetchExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public SpotifyClient(SpotifyTokenService tokens, ObjectMapper mapper) {
         this.tokens = tokens;
@@ -24,8 +30,54 @@ public class SpotifyClient {
 
     public SpotifySnapshot fetch(OAuth2AuthenticationToken authentication) {
         String token = tokens.validAccessToken(authentication.getName());
-        return new SpotifySnapshot(topArtists(token, "short_term", 20), topArtists(token, "medium_term", 20),
-                topArtists(token, "long_term", 20), topTracks(token), recentlyPlayed(token));
+        Future<List<SpotifySnapshot.Artist>> shortTermArtists =
+                fetchExecutor.submit(() -> topArtists(token, "short_term", 20));
+        Future<List<SpotifySnapshot.Artist>> mediumTermArtists =
+                fetchExecutor.submit(() -> topArtists(token, "medium_term", 20));
+        Future<List<SpotifySnapshot.Artist>> longTermArtists =
+                fetchExecutor.submit(() -> topArtists(token, "long_term", 20));
+        Future<List<SpotifySnapshot.Track>> topTracks =
+                fetchExecutor.submit(() -> topTracks(token));
+        Future<List<SpotifySnapshot.Track>> recentlyPlayed =
+                fetchExecutor.submit(() -> recentlyPlayed(token));
+
+        try {
+            return new SpotifySnapshot(
+                    await(shortTermArtists),
+                    await(mediumTermArtists),
+                    await(longTermArtists),
+                    await(topTracks),
+                    await(recentlyPlayed));
+        } catch (RuntimeException exception) {
+            shortTermArtists.cancel(true);
+            mediumTermArtists.cancel(true);
+            longTermArtists.cancel(true);
+            topTracks.cancel(true);
+            recentlyPlayed.cancel(true);
+            throw exception;
+        }
+    }
+
+    private <T> T await(Future<T> future) {
+        try {
+            return future.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new SpotifyException(
+                    "Spotify request was interrupted.", true, interrupted);
+        } catch (ExecutionException execution) {
+            Throwable cause = execution.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new SpotifyException(
+                    "Spotify is temporarily unavailable. Please try again.", true, cause);
+        }
+    }
+
+    @PreDestroy
+    void shutdown() {
+        fetchExecutor.close();
     }
 
     private List<SpotifySnapshot.Artist> topArtists(String token, String range, int limit) {
