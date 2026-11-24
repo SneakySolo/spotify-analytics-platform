@@ -24,27 +24,29 @@ function anomaly(metric) {
     return metric?.available && Number(metric.value) === 0
         ? `<p class="metric-anomaly">Wow — an anomaly. This metric came out to 0${metric.unit === 'percent' ? '%' : ''}.</p>` : '';
 }
-function trackList(items, artists = false) {
+function trackList(items, artists = false, firstNumber = 1) {
     if (!Array.isArray(items) || !items.length) return '<p class="muted">Spotify did not return enough data for this slide.</p>';
-    return `<ol class="track-list">${items.slice(0, 5).map((item, index) => `<li>${image(item.imageUrl)}<span class="track-number">${String(index + 1).padStart(2, '0')}</span><span><strong>${esc(item.name)}</strong><small>${esc(artists ? '' : item.artist?.name || '')}</small></span></li>`).join('')}</ol>`;
+    return `<ol class="track-list">${items.slice(0, 5).map((item, index) => `<li>${image(item.imageUrl)}<span class="track-number">${String(index + firstNumber).padStart(2, '0')}</span><span><strong>${esc(item.name)}</strong><small>${esc(artists ? '' : item.artist?.name || '')}</small></span></li>`).join('')}</ol>`;
 }
 function rankedFeature(items, artists = false) {
     if (!Array.isArray(items) || !items.length) return '<p class="muted">Spotify did not return enough data for this slide.</p>';
     const first = items[0];
-    return `<div class="ranked-feature"><div class="ranked-feature-lead">${image(first.imageUrl, 'ranked-feature-image')}<strong>${esc(first.name)}</strong><small>${esc(artists ? 'No. 1 artist' : first.artist?.name || 'No. 1 track')}</small></div><div class="ranked-feature-list">${trackList(items.slice(1), artists)}</div></div>`;
+    return `<div class="ranked-feature"><div class="ranked-feature-lead">${image(first.imageUrl, 'ranked-feature-image')}<div class="ranked-feature-name"><span class="track-number">01</span><strong>${esc(first.name)}</strong></div><small>${esc(artists ? 'No. 1 artist' : first.artist?.name || 'No. 1 track')}</small></div><div class="ranked-feature-list">${trackList(items.slice(1), artists, 2)}</div></div>`;
 }
 function description(text) { return `<p class="metric-description">${esc(text)}</p>`; }
+function growthClass(growth) { return growth?.trend === 'growth' ? 'growth-positive' : growth?.trend === 'decline' ? 'growth-negative' : 'growth-tie'; }
+function growthMessage(growth) { return growth?.trend === 'growth' ? 'More music joined your library in 2026.' : growth?.trend === 'decline' ? 'Your library grew more slowly in 2026.' : 'Your library grew at the same pace in both years.'; }
 function render(data) {
     const profile = data.profile || {}, leadTrack = data.topTracks?.[0], leadArtist = data.topArtists?.[0];
     const slides = [
         `<p class="card-label">01 / 13</p><div class="intro-profile">${image(profile.imageUrl, 'intro-profile-image')}<h2>${esc(profile.displayName || 'Your')}<br><em>Wrapped.</em></h2></div><p>Your listening story, based on Spotify data available right now.</p>`,
         `<p class="card-label">02 / 13</p><h2>${esc(data.savedTrackCount)}<br><em>liked songs.</em></h2>${description('The total number of tracks currently saved in your Spotify library.')}`,
-        `<p class="card-label">03 / 13</p><h2>Your top<br><em>tracks.</em></h2>${rankedFeature(data.topTracks)}<div class="supporting-stat"><strong>${esc(value(data.totalTracksListened, '—'))}</strong><span>unique tracks in your recent sample</span></div>`,
-        `<p class="card-label">04 / 13</p><h2>Your top<br><em>artists.</em></h2>${rankedFeature(data.topArtists, true)}<div class="supporting-stat"><strong>${esc(value(data.totalAlbumsListened, '—'))}</strong><span>unique albums in your recent sample</span></div>`,
-        `<p class="card-label">05 / 13</p><h2>${esc(value(data.estimatedListeningTime, 'Not enough data'))}<br><em>estimated.</em></h2>${anomaly(data.estimatedListeningTime)}${description('A best-effort estimate from consecutive recent plays — it is not yearly or lifetime listening time.')}`,
-        `<p class="card-label">06 / 13</p><h2>${esc(value(data.totalTracksListened))}<br><em>unique tracks.</em></h2>${anomaly(data.totalTracksListened)}${description('How many different tracks appeared in the recent listening sample Spotify provided.')}`,
-        `<p class="card-label">07 / 13</p><h2>${esc(value(data.totalAlbumsListened))}<br><em>unique albums.</em></h2>${anomaly(data.totalAlbumsListened)}${description('How many different albums appeared in the recent listening sample.')}`,
-        `<p class="card-label">08 / 13</p><h2>Your top<br><em>genres.</em></h2>${data.topGenres?.length ? `<ol class="track-list">${data.topGenres.map(g => `<li><span class="track-number">${g.artistCount}</span><span><strong>${esc(g.genre)}</strong><small>artist representations</small></span></li>`).join('')}</ol>` : '<p class="muted">Spotify returned insufficient genre information.</p>'}${description('These are the genres represented by your top artists, not percentages of your listening.')}`,
+        `<p class="card-label">03 / 13</p><h2>Your top<br><em>tracks.</em></h2>${rankedFeature(data.topTracks)}`,
+        `<p class="card-label">04 / 13</p><h2>${esc(value(data.totalTracksListened))}<br><em>unique tracks.</em></h2>${anomaly(data.totalTracksListened)}${description('Different tracks found in the recent listening sample Spotify provided.')}`,
+        `<p class="card-label">05 / 13</p><h2>Your top<br><em>artists.</em></h2>${rankedFeature(data.topArtists, true)}`,
+        `<p class="card-label">06 / 13</p><h2>${esc(value(data.totalAlbumsListened))}<br><em>unique albums.</em></h2>${anomaly(data.totalAlbumsListened)}${description('Different albums found in the recent listening sample.')}`,
+        `<p class="card-label">07 / 13</p><h2>${esc(value(data.estimatedListeningTime, 'Not enough data'))}<br><em>estimated.</em></h2>${anomaly(data.estimatedListeningTime)}${description('A best-effort estimate from consecutive recent plays — it is not yearly or lifetime listening time.')}`,
+        `<p class="card-label">08 / 13</p><div class="library-growth ${growthClass(data.libraryGrowth)}"><h2>Library<br><em>growth.</em></h2><div class="growth-years"><div><strong>${esc(data.libraryGrowth?.savedIn2025 ?? '—')}</strong><span>saved in 2025</span></div><div><strong>${esc(data.libraryGrowth?.savedIn2026 ?? '—')}</strong><span>saved in 2026</span></div></div><p>${esc(growthMessage(data.libraryGrowth))}</p></div>${description('A year-over-year look at how many tracks you added to your library.')}`,
         `<p class="card-label">09 / 13</p><h2>Hidden<br><em>gems.</em></h2>${trackList(data.hiddenGems)}${description('Long-term favourites that are missing from your current short-term top tracks — a gentle nudge to revisit them.')}`,
         `<p class="card-label">10 / 13</p><div class="score-with-image">${image(leadTrack?.imageUrl || leadTrack?.artist?.imageUrl, 'score-image')}<div><h2>${esc(value(data.tasteDiversityScore))}<br><em>taste diversity.</em></h2></div></div>${anomaly(data.tasteDiversityScore)}${description('A higher score means your favourite tracks are spread more evenly across artists.')}`,
         `<p class="card-label">11 / 13</p><div class="score-with-image">${image(leadArtist?.imageUrl || leadTrack?.imageUrl, 'score-image')}<div><h2>${esc(value(data.tasteEvolutionScore))}<br><em>taste evolution.</em></h2></div></div>${anomaly(data.tasteEvolutionScore)}${description('How different your short-term top-track lineup is from your long-term favourites.')}`,

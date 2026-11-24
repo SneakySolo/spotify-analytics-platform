@@ -60,6 +60,8 @@ h1 { margin: 1.2rem 0; font-size: clamp(3.7rem, 8vw, 7.8rem); line-height: .91; 
 .ranked-feature-image { width: min(100%, 270px); aspect-ratio: 1; object-fit: cover; border-radius: .75rem; background: var(--purple); }
 .ranked-feature-lead strong { font-size: 1.35rem; overflow-wrap: anywhere; }
 .ranked-feature-lead small { color: var(--white); }
+.ranked-feature-name { display: flex; align-items: baseline; gap: .65rem; min-width: 0; }
+.ranked-feature-name strong { overflow-wrap: anywhere; }
 .ranked-feature-list .track-list { margin-top: 0; }
 .ranked-feature-list .track-list li:first-child { border-top: 0; }
 .supporting-stat { display: flex; align-items: baseline; gap: .75rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--purple); }
@@ -70,6 +72,20 @@ h1 { margin: 1.2rem 0; font-size: clamp(3.7rem, 8vw, 7.8rem); line-height: .91; 
 .score-with-image { display: flex; align-items: center; gap: 2rem; margin: 1.75rem 0 .25rem; }
 .score-with-image h2 { margin: 0; }
 .score-image { width: clamp(110px, 20vw, 190px); height: clamp(110px, 20vw, 190px); flex: 0 0 auto; border-radius: .75rem; object-fit: cover; background: var(--purple); }
+.score-with-image h2 { font-size: clamp(3.5rem, 9vw, 7.5rem); line-height: .88; letter-spacing: -.09em; }
+.library-growth { padding: 1.5rem; border-left: 6px solid var(--green); border-radius: .75rem; background: rgba(76,29,149,.22); }
+.library-growth h2 { margin: 0 0 1.75rem; font-size: clamp(3rem, 7vw, 6rem); line-height: .9; letter-spacing: -.08em; }
+.growth-years { display: flex; gap: 2rem; flex-wrap: wrap; }
+.growth-years div { display: flex; flex-direction: column; gap: .25rem; }
+.growth-years strong { font-size: clamp(2.25rem, 5vw, 4rem); line-height: 1; }
+.growth-years span { color: var(--white); }
+.library-growth > p { margin-bottom: 0; color: var(--white); font-size: 1.05rem; }
+.growth-positive { border-left-color: var(--green); }
+.growth-positive .growth-years div:last-child strong { color: var(--green); }
+.growth-negative { border-left-color: #ef4444; }
+.growth-negative .growth-years div:last-child strong { color: #ef4444; }
+.growth-tie { border-left-color: #f59e0b; }
+.growth-tie .growth-years strong { color: #f59e0b; }
 .outro-slide { display: flex; min-height: 360px; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 2rem; border: 1px solid var(--green); border-radius: 1.25rem; background: linear-gradient(135deg, rgba(76,29,149,.35), rgba(34,197,94,.12)); }
 .outro-slide h2 { margin: 1rem 0; font-size: clamp(2.8rem, 6vw, 5.5rem); line-height: .95; letter-spacing: -.07em; }
 .outro-slide p:last-child { max-width: 32rem; color: var(--white); font-size: 1.1rem; line-height: 1.5; }

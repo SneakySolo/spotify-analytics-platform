@@ -8,6 +8,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
@@ -24,13 +25,14 @@ public class SpotifyClient {
     public SpotifySnapshot fetch(OAuth2AuthenticationToken authentication) {
         String token = tokens.validAccessToken(authentication.getName());
         Future<SpotifySnapshot.Profile> profile = executor.submit(() -> profile(token));
-        Future<Long> saved = executor.submit(() -> savedTrackCount(token));
+        Future<SavedCounts> saved = executor.submit(() -> savedTrackCounts(token));
         Future<List<SpotifySnapshot.Track>> longTracks = executor.submit(() -> topTracks(token, "long_term"));
         Future<List<SpotifySnapshot.Track>> shortTracks = executor.submit(() -> topTracks(token, "short_term"));
         Future<List<SpotifySnapshot.Artist>> artists = executor.submit(() -> topArtists(token));
         Future<List<SpotifySnapshot.PlayedTrack>> recent = executor.submit(() -> recentlyPlayed(token));
         try {
-            return new SpotifySnapshot(await(profile), await(saved), await(longTracks), await(shortTracks), await(artists), await(recent));
+            SavedCounts savedCounts = await(saved);
+            return new SpotifySnapshot(await(profile), savedCounts.total(), savedCounts.saved2025(), savedCounts.saved2026(), await(longTracks), await(shortTracks), await(artists), await(recent));
         } catch (RuntimeException ex) {
             profile.cancel(true); saved.cancel(true); longTracks.cancel(true); shortTracks.cancel(true); artists.cancel(true); recent.cancel(true);
             throw ex;
@@ -42,11 +44,23 @@ public class SpotifyClient {
         catch (ExecutionException ex) { if (ex.getCause() instanceof RuntimeException r) throw r; throw new SpotifyException("Spotify is temporarily unavailable. Please try again.", true, ex); }
     }
     private SpotifySnapshot.Profile profile(String token) { JsonNode n = get(token, "/me"); return new SpotifySnapshot.Profile(n.path("display_name").asText(null), image(n)); }
-    private long savedTrackCount(String token) {
+    private SavedCounts savedTrackCounts(String token) {
         JsonNode first = get(token, "/me/tracks?limit=50&offset=0");
-        if (first.has("total")) return first.path("total").asLong();
-        long total = 0; int offset = 0;
-        while (true) { JsonNode page = offset == 0 ? first : get(token, "/me/tracks?limit=50&offset=" + offset); int count = page.path("items").size(); total += count; if (count < 50) return total; offset += count; }
+        long total = 0; int saved2025 = 0; int saved2026 = 0; int offset = 0;
+        while (true) {
+            JsonNode page = offset == 0 ? first : get(token, "/me/tracks?limit=50&offset=" + offset);
+            int count = page.path("items").size();
+            total += count;
+            for (JsonNode item : page.path("items")) {
+                try {
+                    int year = Instant.parse(item.path("added_at").asText()).atZone(ZoneOffset.UTC).getYear();
+                    if (year == 2025) saved2025++;
+                    if (year == 2026) saved2026++;
+                } catch (RuntimeException ignored) { /* Missing added_at is unavailable, not invented. */ }
+            }
+            if (count < 50) return new SavedCounts(first.path("total").isNumber() ? first.path("total").asLong() : total, saved2025, saved2026);
+            offset += count;
+        }
     }
     private List<SpotifySnapshot.Track> topTracks(String token, String range) { JsonNode root = get(token, "/me/top/tracks?time_range=" + range + "&limit=50"); List<SpotifySnapshot.Track> out = new ArrayList<>(); root.path("items").forEach(n -> out.add(track(n))); return out; }
     private List<SpotifySnapshot.Artist> topArtists(String token) { JsonNode root = get(token, "/me/top/artists?time_range=long_term&limit=50"); List<SpotifySnapshot.Artist> out = new ArrayList<>(); root.path("items").forEach(n -> out.add(artist(n))); return out; }
@@ -68,6 +82,7 @@ public class SpotifyClient {
     private SpotifySnapshot.Artist artist(JsonNode n) { List<String> genres = new ArrayList<>(); n.path("genres").forEach(g -> genres.add(g.asText())); return new SpotifySnapshot.Artist(n.path("id").asText(null), n.path("name").asText(null), genres, image(n)); }
     private SpotifySnapshot.Track track(JsonNode n) { JsonNode as = n.path("artists"); SpotifySnapshot.Artist a = as.isArray() && !as.isEmpty() ? artist(as.get(0)) : new SpotifySnapshot.Artist(null, null, List.of(), null); JsonNode album = n.path("album"); return new SpotifySnapshot.Track(n.path("id").asText(null), n.path("name").asText(null), n.path("duration_ms").asInt(0), a, album.path("id").asText(null), album.path("name").asText(null), image(album)); }
     private String image(JsonNode n) { return n.path("images").isArray() && !n.path("images").isEmpty() ? n.path("images").get(0).path("url").asText(null) : null; }
+    private record SavedCounts(long total, int saved2025, int saved2026) {}
     @PreDestroy void shutdown() { executor.close(); }
     public static class SpotifyException extends RuntimeException { private final boolean retryable; public SpotifyException(String m, boolean r) { super(m); retryable = r; } public SpotifyException(String m, boolean r, Throwable c) { super(m, c); retryable = r; } public boolean retryable() { return retryable; } }
 }

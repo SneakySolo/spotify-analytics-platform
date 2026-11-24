@@ -8,30 +8,32 @@ import java.util.List;
 public class WrapResult {
     public final SpotifySnapshot.Profile profile;
     public final long savedTrackCount;
+    public final LibraryGrowth libraryGrowth;
     public final List<SpotifySnapshot.Track> topTracks;
     public final List<SpotifySnapshot.Artist> topArtists;
     public final Metric estimatedListeningTime;
     public final Metric totalTracksListened;
     public final Metric totalAlbumsListened;
-    public final List<GenreCount> topGenres;
+    @JsonIgnore public final List<GenreCount> topGenres;
     public final List<SpotifySnapshot.Track> hiddenGems;
     public final Metric tasteDiversityScore;
     public final Metric tasteEvolutionScore;
     public final Metric replayIntensityScore;
     public final String outro;
 
-    public WrapResult(SpotifySnapshot.Profile profile, long savedTrackCount, List<SpotifySnapshot.Track> topTracks,
+    public WrapResult(SpotifySnapshot.Profile profile, long savedTrackCount, LibraryGrowth libraryGrowth, List<SpotifySnapshot.Track> topTracks,
                       List<SpotifySnapshot.Artist> topArtists, Metric estimatedListeningTime,
                       Metric totalTracksListened, Metric totalAlbumsListened, List<GenreCount> topGenres,
                       List<SpotifySnapshot.Track> hiddenGems, Metric tasteDiversityScore,
                       Metric tasteEvolutionScore, Metric replayIntensityScore, String outro) {
-        this.profile = profile; this.savedTrackCount = savedTrackCount; this.topTracks = topTracks; this.topArtists = topArtists;
+        this.profile = profile; this.savedTrackCount = savedTrackCount; this.libraryGrowth = libraryGrowth; this.topTracks = topTracks; this.topArtists = topArtists;
         this.estimatedListeningTime = estimatedListeningTime; this.totalTracksListened = totalTracksListened;
         this.totalAlbumsListened = totalAlbumsListened; this.topGenres = topGenres; this.hiddenGems = hiddenGems;
         this.tasteDiversityScore = tasteDiversityScore; this.tasteEvolutionScore = tasteEvolutionScore;
         this.replayIntensityScore = replayIntensityScore; this.outro = outro;
     }
     public record Metric(Double value, String unit, boolean available, String note) {}
+    public record LibraryGrowth(int savedIn2025, int savedIn2026, int difference, String trend, boolean available, String note) {}
     public record GenreCount(String genre, int artistCount) {}
 
     // Compatibility accessors for callers of the first Wrap API; the UI uses the new fields above.

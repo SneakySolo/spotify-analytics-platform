@@ -18,12 +18,24 @@ public class AnalyticsService {
         List<SpotifySnapshot.Artist> artists = safe(snapshot.longTermArtists());
         List<SpotifySnapshot.PlayedTrack> recent = deduplicateRecent(snapshot.recentlyPlayed());
 
-        return new WrapResult(snapshot.profile(), snapshot.savedTrackCount(), longTracks.stream().limit(5).toList(),
+        return new WrapResult(snapshot.profile(), snapshot.savedTrackCount(), libraryGrowth(snapshot), longTracks.stream().limit(5).toList(),
                 artists.stream().limit(5).toList(), estimatedTime(recent),
                 countMetric(recent.stream().map(p -> id(p.track())).filter(Objects::nonNull).collect(Collectors.toSet()).size(), "tracks", "Unique tracks in the available recent sample."),
                 countMetric(recent.stream().map(p -> p.track() == null ? null : p.track().albumId()).filter(Objects::nonNull).collect(Collectors.toSet()).size(), "albums", "Unique albums in the available recent sample."),
                 genres(artists), hiddenGems(longTracks, shortTracks), diversity(longTracks), evolution(longTracks, shortTracks), replay(recent),
                 "That's your Wrap for now! Keep listening, keep discovering, and tune in anytime for another Wrap.");
+    }
+
+    private WrapResult.LibraryGrowth libraryGrowth(SpotifySnapshot snapshot) {
+        int saved2025 = snapshot.savedTracks2025();
+        int saved2026 = snapshot.savedTracks2026();
+        String trend = saved2026 > saved2025 ? "growth" : saved2026 < saved2025 ? "decline" : "tie";
+        String note = switch (trend) {
+            case "growth" -> "You saved more tracks in 2026 than in 2025.";
+            case "decline" -> "You saved fewer tracks in 2026 than in 2025.";
+            default -> "You saved the same number of tracks in both years.";
+        };
+        return new WrapResult.LibraryGrowth(saved2025, saved2026, saved2026 - saved2025, trend, true, note);
     }
 
     private WrapResult.Metric countMetric(int value, String unit, String note) { return new WrapResult.Metric((double) value, unit, true, note); }
