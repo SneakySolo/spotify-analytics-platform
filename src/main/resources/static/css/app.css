@@ -73,6 +73,10 @@ h1 { margin: 1.2rem 0; font-size: clamp(3.7rem, 8vw, 7.8rem); line-height: .91; 
 .supporting-stat strong { color: var(--green); font-size: 2rem; line-height: 1; }
 .supporting-stat span { color: var(--white); }
 .metric-description { max-width: 42rem; margin: 1.25rem 0 0; color: var(--white); font-size: 1.05rem; line-height: 1.45; }
+.annual-estimate { margin: 1.25rem 0 0; padding: 1rem 1.25rem; border-left: 4px solid var(--green); background: rgba(34,197,94,.08); }
+.annual-estimate div { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; }
+.annual-estimate strong { color: var(--green); font-size: clamp(1.75rem, 4vw, 3rem); line-height: 1; }
+.annual-estimate span { color: var(--white); }
 .metric-anomaly { display: inline-block; margin: .75rem 0 0; padding: .55rem .8rem; border: 1px solid var(--green); border-radius: .5rem; color: var(--green); font-weight: 600; }
 .score-with-image { display: flex; align-items: center; gap: 2rem; margin: 1.75rem 0 .25rem; }
 .score-with-image h2 { margin: 0; }

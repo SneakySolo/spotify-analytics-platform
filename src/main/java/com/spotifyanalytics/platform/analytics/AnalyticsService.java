@@ -3,6 +3,10 @@ package com.spotifyanalytics.platform.analytics;
 import com.spotifyanalytics.platform.spotify.SpotifySnapshot;
 import org.springframework.stereotype.Service;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.Year;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -19,7 +23,7 @@ public class AnalyticsService {
         List<SpotifySnapshot.PlayedTrack> recent = deduplicateRecent(snapshot.recentlyPlayed());
 
         return new WrapResult(snapshot.profile(), snapshot.savedTrackCount(), libraryGrowth(snapshot), longTracks.stream().limit(5).toList(),
-                artists.stream().limit(5).toList(), estimatedTime(recent),
+                artists.stream().limit(5).toList(), estimatedTime(recent), estimatedYearListeningTime(recent, LocalDate.now(ZoneOffset.UTC)),
                 countMetric(recent.stream().map(p -> id(p.track())).filter(Objects::nonNull).collect(Collectors.toSet()).size(), "tracks", "Unique tracks in the available recent sample."),
                 countMetric(recent.stream().map(p -> p.track() == null ? null : p.track().albumId()).filter(Objects::nonNull).collect(Collectors.toSet()).size(), "albums", "Unique albums in the available recent sample."),
                 genres(artists), hiddenGems(longTracks, shortTracks), diversity(longTracks), evolution(longTracks, shortTracks), replay(recent),
@@ -52,6 +56,35 @@ public class AnalyticsService {
             if (gap > 0 && gap <= current.track().durationMs() + LISTENING_GAP_TOLERANCE_MS) total += Math.min(gap, current.track().durationMs());
         }
         return total == 0 ? unavailable("estimated milliseconds", "No plausible consecutive listening interval was available.") : new WrapResult.Metric((double) total, "estimated milliseconds", true, "Estimated from the recent sample; Spotify does not provide actual listened milliseconds.");
+    }
+
+    /**
+     * Annualizes the recent sample carefully: first estimate each usable day's time,
+     * then average those days, then project that average through the early-December Wrap date.
+     */
+    public WrapResult.Metric estimatedYearListeningTime(List<SpotifySnapshot.PlayedTrack> events, LocalDate today) {
+        List<SpotifySnapshot.PlayedTrack> ordered = deduplicateRecent(events);
+        Map<LocalDate, Long> dailyMilliseconds = new HashMap<>();
+        for (int i = 0; i < ordered.size() - 1; i++) {
+            SpotifySnapshot.PlayedTrack current = ordered.get(i), next = ordered.get(i + 1);
+            if (current.track() == null || current.playedAt() == null || next.playedAt() == null || current.track().durationMs() <= 0) continue;
+            long gap = Duration.between(current.playedAt(), next.playedAt()).toMillis();
+            if (gap > 0 && gap <= current.track().durationMs() + LISTENING_GAP_TOLERANCE_MS) {
+                long listened = Math.min(gap, current.track().durationMs());
+                LocalDate day = current.playedAt().atZone(ZoneOffset.UTC).toLocalDate();
+                dailyMilliseconds.merge(day, listened, Long::sum);
+            }
+        }
+        if (dailyMilliseconds.isEmpty()) return unavailable("estimated milliseconds", "Insufficient day-level data to annualize the recent estimate.");
+
+        long dailyAverage = Math.round(dailyMilliseconds.values().stream().mapToLong(Long::longValue).average().orElse(0));
+        LocalDate yearStart = LocalDate.of(today.getYear(), 1, 1);
+        LocalDate plannedWrapDate = LocalDate.of(today.getYear(), 12, 1);
+        long daysThroughWrap = ChronoUnit.DAYS.between(yearStart, plannedWrapDate) + 1;
+        if (today.isAfter(plannedWrapDate)) daysThroughWrap = Year.of(today.getYear()).length();
+        long projected = dailyAverage * daysThroughWrap;
+        return new WrapResult.Metric((double) projected, "estimated milliseconds", true,
+                "Annualized estimate from " + dailyMilliseconds.size() + " observed day(s), projected through the early-December Wrap date. Spotify does not provide verified yearly listening time.");
     }
 
     private List<WrapResult.GenreCount> genres(List<SpotifySnapshot.Artist> artists) {

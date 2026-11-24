@@ -20,6 +20,11 @@ function value(metric, fallback = 'Unavailable') {
     if (metric.unit === 'estimated milliseconds') return `${Math.round(metric.value / 60000)} minutes`;
     return Math.round(metric.value);
 }
+function duration(metric, fallback = 'Unavailable') {
+    if (!metric?.available) return fallback;
+    const minutes = Math.round(metric.value / 60000), hours = Math.floor(minutes / 60), remaining = minutes % 60;
+    return hours > 0 ? `${hours}h ${remaining}m` : `${minutes}m`;
+}
 function anomaly(metric) {
     return metric?.available && Number(metric.value) === 0
         ? `<p class="metric-anomaly">Wow — an anomaly. This metric came out to 0${metric.unit === 'percent' ? '%' : ''}.</p>` : '';
@@ -45,7 +50,7 @@ function render(data) {
         `<p class="card-label">04 / 13</p><h2>${esc(value(data.totalTracksListened))}<br><em>unique tracks.</em></h2>${anomaly(data.totalTracksListened)}${description('Different tracks found in the recent listening sample Spotify provided.')}`,
         `<p class="card-label">05 / 13</p><h2>Your top<br><em>artists.</em></h2>${rankedFeature(data.topArtists, true)}`,
         `<p class="card-label">06 / 13</p><h2>${esc(value(data.totalAlbumsListened))}<br><em>unique albums.</em></h2>${anomaly(data.totalAlbumsListened)}${description('Different albums found in the recent listening sample.')}`,
-        `<p class="card-label">07 / 13</p><h2>${esc(value(data.estimatedListeningTime, 'Not enough data'))}<br><em>estimated.</em></h2>${anomaly(data.estimatedListeningTime)}${description('A best-effort estimate from consecutive recent plays — it is not yearly or lifetime listening time.')}`,
+        `<p class="card-label">07 / 13</p><h2>${esc(duration(data.estimatedListeningTime, 'Not enough data'))}<br><em>recent time.</em></h2><div class="annual-estimate"><div><strong>${esc(duration(data.estimatedYearListeningTime))}</strong><span>calculated year-long estimate</span></div></div>${anomaly(data.estimatedListeningTime)}${description('Your recent listening time was ' + duration(data.estimatedListeningTime, 'unavailable') + ', which works out to roughly ' + duration(data.estimatedYearListeningTime, 'unavailable') + ' across the year. This is an estimate from your available recent days, not verified Spotify listening time.')}`,
         `<p class="card-label">08 / 13</p><div class="library-growth ${growthClass(data.libraryGrowth)}"><h2>Library<br><em>growth.</em></h2><div class="growth-years"><div><strong>${esc(data.libraryGrowth?.savedIn2025 ?? '—')}</strong><span>saved in 2025</span></div><div><strong>${esc(data.libraryGrowth?.savedIn2026 ?? '—')}</strong><span>saved in 2026</span></div></div><p>${esc(growthMessage(data.libraryGrowth))}</p></div>${description('A year-over-year look at how many tracks you added to your library.')}`,
         `<p class="card-label">09 / 13</p><h2>Hidden<br><em>gems.</em></h2>${trackList(data.hiddenGems)}${description('Long-term favourites that are missing from your current short-term top tracks — a gentle nudge to revisit them.')}`,
         `<p class="card-label">10 / 13</p><div class="score-with-image">${image(leadTrack?.imageUrl || leadTrack?.artist?.imageUrl, 'score-image')}<div><h2>${esc(value(data.tasteDiversityScore))}<br><em>taste diversity.</em></h2></div></div>${anomaly(data.tasteDiversityScore)}${description('A higher score means your favourite tracks are spread more evenly across artists.')}`,

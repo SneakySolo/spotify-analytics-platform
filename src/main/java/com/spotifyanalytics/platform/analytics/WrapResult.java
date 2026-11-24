@@ -12,6 +12,7 @@ public class WrapResult {
     public final List<SpotifySnapshot.Track> topTracks;
     public final List<SpotifySnapshot.Artist> topArtists;
     public final Metric estimatedListeningTime;
+    public final Metric estimatedYearListeningTime;
     public final Metric totalTracksListened;
     public final Metric totalAlbumsListened;
     @JsonIgnore public final List<GenreCount> topGenres;
@@ -23,11 +24,12 @@ public class WrapResult {
 
     public WrapResult(SpotifySnapshot.Profile profile, long savedTrackCount, LibraryGrowth libraryGrowth, List<SpotifySnapshot.Track> topTracks,
                       List<SpotifySnapshot.Artist> topArtists, Metric estimatedListeningTime,
+                      Metric estimatedYearListeningTime,
                       Metric totalTracksListened, Metric totalAlbumsListened, List<GenreCount> topGenres,
                       List<SpotifySnapshot.Track> hiddenGems, Metric tasteDiversityScore,
                       Metric tasteEvolutionScore, Metric replayIntensityScore, String outro) {
         this.profile = profile; this.savedTrackCount = savedTrackCount; this.libraryGrowth = libraryGrowth; this.topTracks = topTracks; this.topArtists = topArtists;
-        this.estimatedListeningTime = estimatedListeningTime; this.totalTracksListened = totalTracksListened;
+        this.estimatedListeningTime = estimatedListeningTime; this.estimatedYearListeningTime = estimatedYearListeningTime; this.totalTracksListened = totalTracksListened;
         this.totalAlbumsListened = totalAlbumsListened; this.topGenres = topGenres; this.hiddenGems = hiddenGems;
         this.tasteDiversityScore = tasteDiversityScore; this.tasteEvolutionScore = tasteEvolutionScore;
         this.replayIntensityScore = replayIntensityScore; this.outro = outro;
