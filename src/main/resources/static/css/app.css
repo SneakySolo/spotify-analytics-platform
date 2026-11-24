@@ -51,6 +51,11 @@ h1 { margin: 1.2rem 0; font-size: clamp(3.7rem, 8vw, 7.8rem); line-height: .91; 
 /* Let each outlined slide end directly after its content. */
 .carousel, .story-card { min-height: 0; }
 
+/* Homepage card palette */
+.art-card-back { background: var(--white); color: var(--green); }
+.art-card-front { background: var(--purple); color: var(--white); }
+.art-card-front span { color: var(--white); }
+
 /* New Wrap slide layouts */
 .intro-profile { display: flex; align-items: center; gap: 2.25rem; margin: 2.5rem 0 1.25rem; }
 .intro-profile h2 { margin: 0; font-size: clamp(3rem, 8vw, 6.5rem); line-height: .92; letter-spacing: -.08em; }
