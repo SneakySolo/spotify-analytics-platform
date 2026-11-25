@@ -32,3 +32,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Local interview-preparation notes; intentionally not committed.
+docs/interview-prep/

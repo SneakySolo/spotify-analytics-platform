@@ -19,9 +19,8 @@ public class SpotifyClient {
     private final RestClient rest = RestClient.builder().baseUrl("https://api.spotify.com/v1").build();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-    public SpotifyClient(SpotifyTokenService tokens, com.fasterxml.jackson.databind.ObjectMapper ignored) { this.tokens = tokens; }
+    public SpotifyClient(SpotifyTokenService tokens) { this.tokens = tokens; }
 
-    /** Fetch one in-memory sample for this request. No Wrap data is persisted. */
     public SpotifySnapshot fetch(OAuth2AuthenticationToken authentication) {
         String token = tokens.validAccessToken(authentication.getName());
         Future<SpotifySnapshot.Profile> profile = executor.submit(() -> profile(token));
@@ -32,16 +31,29 @@ public class SpotifyClient {
         Future<List<SpotifySnapshot.PlayedTrack>> recent = executor.submit(() -> recentlyPlayed(token));
         try {
             SavedCounts savedCounts = await(saved);
-            return new SpotifySnapshot(await(profile), savedCounts.total(), savedCounts.saved2025(), savedCounts.saved2026(), await(longTracks), await(shortTracks), await(artists), await(recent));
-        } catch (RuntimeException ex) {
-            profile.cancel(true); saved.cancel(true); longTracks.cancel(true); shortTracks.cancel(true); artists.cancel(true); recent.cancel(true);
-            throw ex;
+            return new SpotifySnapshot(await(profile), savedCounts.total(), savedCounts.saved2025(), savedCounts.saved2026(),
+                    await(longTracks), await(shortTracks), await(artists), await(recent));
+        } catch (RuntimeException exception) {
+            profile.cancel(true);
+            saved.cancel(true);
+            longTracks.cancel(true);
+            shortTracks.cancel(true);
+            artists.cancel(true);
+            recent.cancel(true);
+            throw exception;
         }
     }
+
     private <T> T await(Future<T> future) {
-        try { return future.get(); }
-        catch (InterruptedException ex) { Thread.currentThread().interrupt(); throw new SpotifyException("Spotify request was interrupted.", true, ex); }
-        catch (ExecutionException ex) { if (ex.getCause() instanceof RuntimeException r) throw r; throw new SpotifyException("Spotify is temporarily unavailable. Please try again.", true, ex); }
+        try {
+            return future.get();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new SpotifyException("Spotify request was interrupted.", true, exception);
+        } catch (ExecutionException exception) {
+            if (exception.getCause() instanceof RuntimeException runtimeException) throw runtimeException;
+            throw new SpotifyException("Spotify is temporarily unavailable. Please try again.", true, exception);
+        }
     }
     private SpotifySnapshot.Profile profile(String token) { JsonNode n = get(token, "/me"); return new SpotifySnapshot.Profile(n.path("display_name").asText(null), image(n)); }
     private SavedCounts savedTrackCounts(String token) {
