@@ -43,26 +43,32 @@ public class WrapController {
                 JsonNode cachedResult = mapper.readTree(cached);
                 return ResponseEntity.ok(cachedResult);
             }
-        } catch (Exception ignored) {
+        }
+        catch (Exception ignored) {
             // Redis is an optional performance cache; generate a fresh Wrap if unavailable.
         }
+
         try {
             WrapResult result = analytics.analyze(spotify.fetch(authentication));
             try {
                 redis.opsForValue().set(key, mapper.writeValueAsString(result), cacheTtl);
-            } catch (Exception ignored) {
+            }
+            catch (Exception ignored) {
                 // A cache write failure must not fail Wrap generation.
             }
             return ResponseEntity.ok(result);
-        } catch (SpotifyTokenService.ReauthRequiredException exception) {
+        }
+        catch (SpotifyTokenService.ReauthRequiredException exception) {
             return ResponseEntity.status(401).body(Map.of(
                     "code", "reauth_required",
                     "message", exception.getMessage()));
-        } catch (SpotifyClient.SpotifyException exception) {
+        }
+        catch (SpotifyClient.SpotifyException exception) {
             return ResponseEntity.status(502).body(Map.of(
                     "code", "spotify_error",
                     "message", exception.getMessage()));
-        } catch (Exception exception) {
+        }
+        catch (Exception exception) {
             return ResponseEntity.internalServerError().body(Map.of(
                     "code", "generation_failed",
                     "message", "We could not generate your wrap. Please try again."));
