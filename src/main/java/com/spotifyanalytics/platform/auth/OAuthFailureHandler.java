@@ -14,7 +14,6 @@ import java.nio.charset.StandardCharsets;
 
 @Component
 public class OAuthFailureHandler implements AuthenticationFailureHandler {
-
     @Override
     public void onAuthenticationFailure(
             HttpServletRequest request,
@@ -26,7 +25,6 @@ public class OAuthFailureHandler implements AuthenticationFailureHandler {
                 && oauthException.getError().getErrorCode() != null) {
             errorCode = oauthException.getError().getErrorCode();
         }
-
         response.sendRedirect("/wrap?oauth_error="
                 + URLEncoder.encode(errorCode, StandardCharsets.UTF_8));
     }

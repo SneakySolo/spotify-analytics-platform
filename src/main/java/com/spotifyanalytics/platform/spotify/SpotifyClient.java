@@ -17,7 +17,6 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
@@ -56,20 +55,16 @@ public class SpotifyClient {
     public SpotifySnapshot fetch(OAuth2AuthenticationToken authentication) {
         String token = tokens.validAccessToken(authentication.getName());
         Future<SpotifySnapshot.Profile> profile = executor.submit(() -> timed("profile", () -> profile(token)));
-        Future<SavedCounts> saved = executor.submit(() -> timed("saved-track-counts", () -> savedTrackCounts(token)));
         Future<List<SpotifySnapshot.Track>> longTracks = executor.submit(() -> timed("top-tracks-long-term", () -> topTracks(token, "long_term")));
         Future<List<SpotifySnapshot.Track>> shortTracks = executor.submit(() -> timed("top-tracks-short-term", () -> topTracks(token, "short_term")));
         Future<List<SpotifySnapshot.Artist>> artists = executor.submit(() -> timed("top-artists", () -> topArtists(token)));
         Future<List<SpotifySnapshot.PlayedTrack>> recent = executor.submit(() -> timed("recently-played", () -> recentlyPlayed(token)));
 
         try {
-            SavedCounts savedCounts = await(saved);
-            return new SpotifySnapshot(await(profile), savedCounts.total(), savedCounts.saved2025(), savedCounts.saved2026(),
-                    await(longTracks), await(shortTracks), await(artists), await(recent));
+            return new SpotifySnapshot(await(profile), await(longTracks), await(shortTracks), await(artists), await(recent));
         }
         catch (RuntimeException exception) {
             profile.cancel(true);
-            saved.cancel(true);
             longTracks.cancel(true);
             shortTracks.cancel(true);
             artists.cancel(true);
@@ -113,28 +108,6 @@ public class SpotifyClient {
         return new SpotifySnapshot.Profile(n.path("display_name").asText(null), image(n));
     }
 
-    private SavedCounts savedTrackCounts(String token) {
-        JsonNode first = get(token, "/me/tracks?limit=50&offset=0");
-        long total = 0; int saved2025 = 0; int saved2026 = 0; int offset = 0;
-
-        while (true) {
-            JsonNode page = offset == 0 ? first : get(token, "/me/tracks?limit=50&offset=" + offset);
-            int count = page.path("items").size();
-            total += count;
-            for (JsonNode item : page.path("items")) {
-                try {
-                    int year = Instant.parse(item.path("added_at").asText()).atZone(ZoneOffset.UTC).getYear();
-                    if (year == 2025) saved2025++;
-                    if (year == 2026) saved2026++;
-                }
-                catch (RuntimeException ignored) {
-                    /* Missing added_at is unavailable, not invented. */
-                }
-            }
-            if (count < 50) return new SavedCounts(first.path("total").isNumber() ? first.path("total").asLong() : total, saved2025, saved2026);
-            offset += count;
-        }
-    }
     private List<SpotifySnapshot.Track> topTracks(String token, String range) {
         JsonNode root = get(token, "/me/top/tracks?time_range=" + range + "&limit=50");
         List<SpotifySnapshot.Track> out = new ArrayList<>();
@@ -188,8 +161,6 @@ public class SpotifyClient {
     private String image(JsonNode n) {
         return n.path("images").isArray() && !n.path("images").isEmpty() ? n.path("images").get(0).path("url").asText(null) : null;
     }
-    private record SavedCounts(long total, int saved2025, int saved2026) {}
-
     @PreDestroy
     void shutdown() {
         executor.close();

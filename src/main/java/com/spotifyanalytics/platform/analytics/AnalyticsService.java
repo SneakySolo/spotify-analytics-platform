@@ -6,6 +6,8 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.Year;
 import java.time.ZoneOffset;
+import java.time.DayOfWeek;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.function.Function;
@@ -22,28 +24,41 @@ public class AnalyticsService {
         List<SpotifySnapshot.Artist> artists = safe(snapshot.longTermArtists());
         List<SpotifySnapshot.PlayedTrack> recent = deduplicateRecent(snapshot.recentlyPlayed());
 
-        return new WrapResult(snapshot.profile(), snapshot.savedTrackCount(), libraryGrowth(snapshot), longTracks.stream().limit(5).toList(),
+        return new WrapResult(snapshot.profile(), longTracks.stream().limit(5).toList(),
                 artists.stream().limit(5).toList(), estimatedTime(recent), estimatedYearListeningTime(recent, LocalDate.now(ZoneOffset.UTC)),
                 countMetric(recent.stream().map(p -> id(p.track())).filter(Objects::nonNull).collect(Collectors.toSet()).size(), "tracks", "Unique tracks in the available recent sample."),
                 countMetric(recent.stream().map(p -> p.track() == null ? null : p.track().albumId()).filter(Objects::nonNull).collect(Collectors.toSet()).size(), "albums", "Unique albums in the available recent sample."),
-                genres(artists), hiddenGems(longTracks, shortTracks), diversity(longTracks), evolution(longTracks, shortTracks), replay(recent),
+                genres(artists), hiddenGems(longTracks, shortTracks), listeningRoutine(recent), comfortArtist(recent), diversity(longTracks), tasteChanges(longTracks, shortTracks), replay(recent),
                 "That's your Wrap for now! Keep listening, keep discovering, and tune in anytime for another Wrap.");
-    }
-
-    private WrapResult.LibraryGrowth libraryGrowth(SpotifySnapshot snapshot) {
-        int saved2025 = snapshot.savedTracks2025();
-        int saved2026 = snapshot.savedTracks2026();
-        String trend = saved2026 > saved2025 ? "growth" : saved2026 < saved2025 ? "decline" : "tie";
-        String note = switch (trend) {
-            case "growth" -> "You saved more tracks in 2026 than in 2025.";
-            case "decline" -> "You saved fewer tracks in 2026 than in 2025.";
-            default -> "You saved the same number of tracks in both years.";
-        };
-        return new WrapResult.LibraryGrowth(saved2025, saved2026, saved2026 - saved2025, trend, true, note);
     }
 
     private WrapResult.Metric countMetric(int value, String unit, String note) {
         return new WrapResult.Metric((double) value, unit, true, note);
+    }
+
+    private WrapResult.ListeningRoutine listeningRoutine(List<SpotifySnapshot.PlayedTrack> recent) {
+        if (recent.isEmpty()) return new WrapResult.ListeningRoutine(null, null, false, "No recent listening timestamps were available.");
+        Map<Integer, Long> hours = recent.stream().collect(Collectors.groupingBy(
+                p -> p.playedAt().atZone(ZoneOffset.UTC).getHour(), Collectors.counting()));
+        Map<DayOfWeek, Long> days = recent.stream().collect(Collectors.groupingBy(
+                p -> p.playedAt().atZone(ZoneOffset.UTC).getDayOfWeek(), Collectors.counting()));
+        int hour = hours.entrySet().stream().max(Map.Entry.<Integer, Long>comparingByValue().thenComparing(Map.Entry.comparingByKey(Comparator.reverseOrder()))).get().getKey();
+        DayOfWeek day = days.entrySet().stream().max(Map.Entry.<DayOfWeek, Long>comparingByValue().thenComparing(Map.Entry.comparingByKey(Comparator.reverseOrder()))).get().getKey();
+        String time = java.time.LocalTime.of(hour, 0).format(DateTimeFormatter.ofPattern("h a", Locale.ENGLISH));
+        String note = "Based on the timestamps in Spotify's recent listening sample, not your all-time listening history.";
+        return new WrapResult.ListeningRoutine(time, day.getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH), true, note);
+    }
+
+    private WrapResult.ComfortArtist comfortArtist(List<SpotifySnapshot.PlayedTrack> recent) {
+        Map<String, List<SpotifySnapshot.Artist>> artists = recent.stream()
+                .map(p -> p.track() == null ? null : p.track().artist())
+                .filter(a -> a != null && (a.id() != null || a.name() != null))
+                .collect(Collectors.groupingBy(a -> a.id() != null ? a.id() : a.name()));
+        if (artists.isEmpty()) return new WrapResult.ComfortArtist(null, unavailable("percent", "No recent artist data was available."));
+        List<SpotifySnapshot.Artist> most = artists.values().stream().max(Comparator.comparingInt(List::size)).orElse(List.of());
+        int total = artists.values().stream().mapToInt(List::size).sum();
+        return new WrapResult.ComfortArtist(most.get(0), new WrapResult.Metric(most.size() * 100d / total, "percent", true,
+                "Share of artists in Spotify's recent listening sample, not total lifetime plays."));
     }
 
     /** Adds only intervals where the next event plausibly follows the current track. */
@@ -124,11 +139,17 @@ public class AnalyticsService {
         return new WrapResult.Metric(entropy / Math.log(counts.size()) * 100, "percent", true, "Diversity within the top 50 track sample, not listening-time distribution.");
     }
 
-    private WrapResult.Metric evolution(List<SpotifySnapshot.Track> longTracks, List<SpotifySnapshot.Track> shortTracks) {
+    private WrapResult.TasteChanges tasteChanges(List<SpotifySnapshot.Track> longTracks, List<SpotifySnapshot.Track> shortTracks) {
         Set<String> a = ids(longTracks), b = ids(shortTracks), union = new HashSet<>(a); union.addAll(b);
-        if (union.isEmpty()) return unavailable("percent", "Both affinity samples were empty.");
+        if (union.isEmpty()) return new WrapResult.TasteChanges(
+                unavailable("percent", "Both affinity samples were empty."),
+                unavailable("favorites", "Both affinity samples were empty."));
         Set<String> intersection = new HashSet<>(a); intersection.retainAll(b);
-        return new WrapResult.Metric((1d - intersection.size() / (double) union.size()) * 100, "percent", true, "Jaccard comparison of long-term and short-term affinity sets.");
+        Set<String> discoveries = new HashSet<>(b); discoveries.removeAll(a);
+        return new WrapResult.TasteChanges(
+                new WrapResult.Metric((1d - intersection.size() / (double) union.size()) * 100, "percent", true,
+                        "Jaccard comparison of long-term and short-term top-track sets."),
+                countMetric(discoveries.size(), "favorites", "Recent top tracks that do not appear in your long-term top tracks."));
     }
 
     private WrapResult.Metric replay(List<SpotifySnapshot.PlayedTrack> recent) {

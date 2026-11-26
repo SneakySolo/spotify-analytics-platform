@@ -6,13 +6,11 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
-import lombok.Getter;
 
 import java.time.Instant;
 
 @Entity
 @Table(name = "spotify_users")
-@Getter
 public class SpotifyConnection {
 
     @Id
@@ -87,5 +85,21 @@ public class SpotifyConnection {
         refreshTokenCiphertext = null;
         accessTokenExpiresAt = null;
         connectionStatus = "DISCONNECTED";
+    }
+
+    public String getAccessTokenCiphertext() {
+        return accessTokenCiphertext;
+    }
+
+    public String getRefreshTokenCiphertext() {
+        return refreshTokenCiphertext;
+    }
+
+    public Instant getAccessTokenExpiresAt() {
+        return accessTokenExpiresAt;
+    }
+
+    public String getConnectionStatus() {
+        return connectionStatus;
     }
 }

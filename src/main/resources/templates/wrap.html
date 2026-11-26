@@ -39,31 +39,67 @@ function rankedFeature(items, artists = false) {
     return `<div class="ranked-feature"><div class="ranked-feature-lead">${image(first.imageUrl, 'ranked-feature-image')}<div class="ranked-feature-name"><span class="track-number">01</span><strong>${esc(first.name)}</strong></div><small>${esc(artists ? 'No. 1 artist' : first.artist?.name || 'No. 1 track')}</small></div><div class="ranked-feature-list">${trackList(items.slice(1), artists, 2)}</div></div>`;
 }
 function description(text) { return `<p class="metric-description">${esc(text)}</p>`; }
-function growthClass(growth) { return growth?.trend === 'growth' ? 'growth-positive' : growth?.trend === 'decline' ? 'growth-negative' : 'growth-tie'; }
-function growthMessage(growth) { return growth?.trend === 'growth' ? 'More music joined your library in 2026.' : growth?.trend === 'decline' ? 'Your library grew more slowly in 2026.' : 'Your library grew at the same pace in both years.'; }
+function tasteChanges(changes) {
+    const difference = value(changes?.differencePercent, 'Not enough data');
+    const discoveries = value(changes?.discoveredFavorites, 'Not enough data');
+    return `<div class="taste-changes"><p>Your recent taste is <strong>${esc(difference)}</strong> different from your usual favorites.</p><p>You discovered <strong>${esc(discoveries)}</strong> newer favorites.</p></div>`;
+}
+function routine(routine) {
+    if (!routine?.available) return '<p class="muted">Spotify did not return enough recent timestamps for this slide.</p>';
+    return `<div class="routine-card"><div class="routine-item"><strong>${esc(routine.peakTime)}</strong><span>go-to listening time</span></div><div class="routine-item"><strong>${esc(routine.peakDay)}</strong><span>go-to listening day</span></div></div>${description('Recently, you have been listening most around ' + routine.peakTime + ' on ' + routine.peakDay + '. This reflects the recent Spotify sample, not your all-time routine.')}`;
+}
+function comfortArtist(comfort) {
+    if (!comfort?.artist) return '<p class="muted">Spotify did not return enough recent artist data for this slide.</p>';
+    return `<div class="comfort-artist">${image(comfort.artist.imageUrl, 'score-image')}<div><h2>${esc(comfort.artist.name || 'Your favorite')}</h2><p><strong>${esc(value(comfort.sharePercent))}</strong> of artists in your recent sample.</p></div></div>${description('Recently, ' + (comfort.artist.name || 'this artist') + ' has been your go-to listen. This is based on the recent sample, not total lifetime plays.')}`;
+}
 function render(data) {
     const profile = data.profile || {}, leadTrack = data.topTracks?.[0], leadArtist = data.topArtists?.[0];
     const slides = [
         `<p class="card-label">01 / 13</p><div class="intro-profile">${image(profile.imageUrl, 'intro-profile-image')}<h2>${esc(profile.displayName || 'Your')}<br><em>Wrapped.</em></h2></div><p>Your listening story, based on Spotify data available right now.</p>`,
-        `<p class="card-label">02 / 13</p><h2>${esc(data.savedTrackCount)}<br><em>liked songs.</em></h2>${description('The total number of tracks currently saved in your Spotify library.')}`,
-        `<p class="card-label">03 / 13</p><h2>Your top<br><em>tracks.</em></h2>${rankedFeature(data.topTracks)}`,
-        `<p class="card-label">04 / 13</p><h2>${esc(value(data.totalTracksListened))}<br><em>unique tracks.</em></h2>${anomaly(data.totalTracksListened)}${description('Different tracks found in the recent listening sample Spotify provided.')}`,
-        `<p class="card-label">05 / 13</p><h2>Your top<br><em>artists.</em></h2>${rankedFeature(data.topArtists, true)}`,
-        `<p class="card-label">06 / 13</p><h2>${esc(value(data.totalAlbumsListened))}<br><em>unique albums.</em></h2>${anomaly(data.totalAlbumsListened)}${description('Different albums found in the recent listening sample.')}`,
-        `<p class="card-label">07 / 13</p><h2>${esc(duration(data.estimatedListeningTime, 'Not enough data'))}<br><em>recent time.</em></h2><div class="annual-estimate"><div><strong>${esc(duration(data.estimatedYearListeningTime))}</strong><span>calculated year-long estimate</span></div></div>${anomaly(data.estimatedListeningTime)}${description('Your recent listening time was ' + duration(data.estimatedListeningTime, 'unavailable') + ', which works out to roughly ' + duration(data.estimatedYearListeningTime, 'unavailable') + ' across the year. This is an estimate from your available recent days, not verified Spotify listening time.')}`,
-        `<p class="card-label">08 / 13</p><div class="library-growth ${growthClass(data.libraryGrowth)}"><h2>Library<br><em>growth.</em></h2><div class="growth-years"><div><strong>${esc(data.libraryGrowth?.savedIn2025 ?? '—')}</strong><span>saved in 2025</span></div><div><strong>${esc(data.libraryGrowth?.savedIn2026 ?? '—')}</strong><span>saved in 2026</span></div></div><p>${esc(growthMessage(data.libraryGrowth))}</p></div>${description('A year-over-year look at how many tracks you added to your library.')}`,
-        `<p class="card-label">09 / 13</p><h2>Hidden<br><em>gems.</em></h2>${trackList(data.hiddenGems)}${description('Long-term favourites that are missing from your current short-term top tracks — a gentle nudge to revisit them.')}`,
-        `<p class="card-label">10 / 13</p><div class="score-with-image">${image(leadTrack?.imageUrl || leadTrack?.artist?.imageUrl, 'score-image')}<div><h2>${esc(value(data.tasteDiversityScore))}<br><em>taste diversity.</em></h2></div></div>${anomaly(data.tasteDiversityScore)}${description('A higher score means your favourite tracks are spread more evenly across artists.')}`,
-        `<p class="card-label">11 / 13</p><div class="score-with-image">${image(leadArtist?.imageUrl || leadTrack?.imageUrl, 'score-image')}<div><h2>${esc(value(data.tasteEvolutionScore))}<br><em>taste evolution.</em></h2></div></div>${anomaly(data.tasteEvolutionScore)}${description('How different your short-term top-track lineup is from your long-term favourites.')}`,
+        `<p class="card-label">02 / 13</p><h2>Your top<br><em>tracks.</em></h2>${rankedFeature(data.topTracks)}`,
+        `<p class="card-label">03 / 13</p><h2>${esc(value(data.totalTracksListened))}<br><em>unique tracks.</em></h2>${anomaly(data.totalTracksListened)}${description('Different tracks found in the recent listening sample Spotify provided.')}`,
+        `<p class="card-label">04 / 13</p><h2>Your top<br><em>artists.</em></h2>${rankedFeature(data.topArtists, true)}`,
+        `<p class="card-label">05 / 13</p><h2>${esc(value(data.totalAlbumsListened))}<br><em>unique albums.</em></h2>${anomaly(data.totalAlbumsListened)}${description('Different albums found in the recent listening sample.')}`,
+        `<p class="card-label">06 / 13</p><h2>${esc(duration(data.estimatedListeningTime, 'Not enough data'))}<br><em>recent time.</em></h2><div class="annual-estimate"><div><strong>${esc(duration(data.estimatedYearListeningTime))}</strong><span>calculated year-long estimate</span></div></div>${anomaly(data.estimatedListeningTime)}${description('Your recent listening time was ' + duration(data.estimatedListeningTime, 'unavailable') + ', which works out to roughly ' + duration(data.estimatedYearListeningTime, 'unavailable') + ' across the year. This is an estimate from your available recent days, not verified Spotify listening time.')}`,
+        `<p class="card-label">07 / 13</p><h2>As per your<br><em>routine.</em></h2>${routine(data.listeningRoutine)}`,
+        `<p class="card-label">08 / 13</p><h2>Your comfort<br><em>artist.</em></h2>${comfortArtist(data.comfortArtist)}`,
+        `<p class="card-label">09 / 13</p><h2>What changed in<br><em>your taste?</em></h2>${tasteChanges(data.tasteChanges)}${description('We compare your recent top tracks with your long-term favorites to show what feels new right now.')}`,
+        `<p class="card-label">10 / 13</p><h2>Hidden<br><em>gems.</em></h2>${trackList(data.hiddenGems)}${description('Long-term favourites that are missing from your current short-term top tracks — a gentle nudge to revisit them.')}`,
+        `<p class="card-label">11 / 13</p><div class="score-with-image">${image(leadTrack?.imageUrl || leadTrack?.artist?.imageUrl, 'score-image')}<div><h2>${esc(value(data.tasteDiversityScore))}<br><em>taste diversity.</em></h2></div></div>${anomaly(data.tasteDiversityScore)}${description('A higher score means your favourite tracks are spread more evenly across artists.')}`,
         `<p class="card-label">12 / 13</p><h2>${esc(value(data.replayIntensityScore))}<br><em>replay intensity.</em></h2>${anomaly(data.replayIntensityScore)}${description('How much repetition appears in the recent sample — not Spotify’s actual play counts.')}`,
         `<div class="outro-slide"><p class="card-label">13 / 13</p><h2>Keep listening,<br><em>keep discovering.</em></h2><p>${esc(data.outro || "That's your Wrap for now!")}</p></div>`
     ];
     return `<div class="carousel-heading"><p class="eyebrow">YOUR PERSONAL LISTENING STORY</p><h1>Your music,<br><em>in full colour.</em></h1><p class="wrap-lede">Use the arrows to move through your story.</p></div><div class="carousel" aria-live="polite">${slides.map((slide, index) => `<div class="story-card ${index ? '' : 'active'}"><div class="story-card-content">${slide}</div></div>`).join('')}</div><div class="carousel-controls"><button class="arrow-button" id="previous">←</button><div class="progress-dots">${slides.map((_, index) => `<span class="${index ? '' : 'current'}"></span>`).join('')}</div><button class="arrow-button" id="next">→</button></div>`;
 }
 function activate() { const cards = [...document.querySelectorAll('.story-card')], dots = [...document.querySelectorAll('.progress-dots span')], previous = document.querySelector('#previous'), next = document.querySelector('#next'); let index = 0; function show(nextIndex) { index = Math.max(0, Math.min(cards.length - 1, nextIndex)); cards.forEach((card, i) => card.classList.toggle('active', i === index)); dots.forEach((dot, i) => dot.classList.toggle('current', i === index)); previous.disabled = index === 0; next.disabled = index === cards.length - 1; } previous.onclick = () => show(index - 1); next.onclick = () => show(index + 1); show(0); }
-async function csrf() { const response = await fetch('/api/csrf'); const token = await response.json(); return {[token.headerName]: token.token}; }
-async function generate() { try { const response = await fetch('/wraps', {method: 'POST', headers: await csrf()}), data = await response.json(); if (response.status === 401) throw Error("Spotify needs to be connected again. <a href='/oauth2/authorization/spotify'>Reconnect Spotify</a>"); if (!response.ok) throw Error(data.message || 'We could not generate your wrap.'); loading.hidden = true; result.hidden = false; result.innerHTML = render(data); activate(); } catch (error) { loading.innerHTML = `<p class="eyebrow">A SMALL DETOUR</p><h1>We couldn't find<br><em>your wrap.</em></h1><p class="error-copy">${error.message}</p><a class="button" href="/">Back home</a>`; } }
-generate();
+async function readJson(response) {
+    const body = await response.text();
+    if (!body.trim()) return {};
+    try { return JSON.parse(body); }
+    catch (_) { return {message: body}; }
+}
+async function csrf() {
+    const response = await fetch('/api/csrf', {headers: {'Accept': 'application/json'}});
+    const token = await readJson(response);
+    if (!response.ok || !token.headerName || !token.token) throw Error('Your session expired. Please reconnect Spotify.');
+    return {[token.headerName]: token.token};
+}
+function showError(message) {
+    loading.innerHTML = `<p class="eyebrow">A SMALL DETOUR</p><h1>We couldn't find<br><em>your wrap.</em></h1><p class="error-copy">${message}</p><a class="button" href="/oauth2/authorization/spotify">Reconnect Spotify</a>`;
+}
+async function generate() {
+    try {
+        const response = await fetch('/wraps', {method: 'POST', headers: await csrf()}), data = await readJson(response);
+        if (response.status === 401) throw Error("Spotify needs to be connected again.");
+        if (!response.ok) throw Error(data.message || 'We could not generate your wrap.');
+        if (!data || !data.topTracks) throw Error('Spotify returned an incomplete wrap. Please reconnect and try again.');
+        loading.hidden = true; result.hidden = false; result.innerHTML = render(data); activate();
+    } catch (error) { showError(error.message || 'We could not generate your wrap.'); }
+}
+const oauthError = new URLSearchParams(window.location.search).get('oauth_error');
+if (oauthError === 'spotify_rate_limited') showError('Spotify is temporarily rate-limiting this app. Wait a few minutes, then reconnect.');
+else if (oauthError) showError('Spotify could not complete the connection. Please reconnect and try again.');
+else generate();
 </script>
 </body>
 </html>

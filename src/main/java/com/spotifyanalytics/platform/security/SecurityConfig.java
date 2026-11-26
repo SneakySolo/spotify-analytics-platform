@@ -5,6 +5,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import com.spotifyanalytics.platform.auth.OAuthSuccessHandler;
 import com.spotifyanalytics.platform.auth.OAuthFailureHandler;
@@ -24,6 +27,9 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http.csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
+                .exceptionHandling(exceptions -> exceptions
+                        .defaultAuthenticationEntryPointFor(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED),
+                                new AntPathRequestMatcher("/wraps")))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/",

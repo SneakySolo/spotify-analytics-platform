@@ -39,4 +39,18 @@ class AnalyticsServiceTest {
         assertEquals("Hip-Hop", AnalyticsService.normalizeGenre("trap"));
         assertEquals("Pop", AnalyticsService.normalizeGenre("indie pop"));
     }
+
+    @Test
+    void tasteChangesComparesRecentAndLongTermFavorites() {
+        var artist = new SpotifySnapshot.Artist("a", "A", List.of(), null);
+        var usual = new SpotifySnapshot.Track("usual", "Usual", 180000, artist, "al", "Album", null);
+        var recent = new SpotifySnapshot.Track("recent", "Recent", 180000, artist, "al", "Album", null);
+        var snapshot = new SpotifySnapshot(null, List.of(usual), List.of(usual, recent), List.of(artist), List.of());
+
+        var changes = new AnalyticsService().analyze(snapshot).tasteChanges;
+
+        assertEquals(50d, changes.differencePercent().value());
+        assertEquals(1d, changes.discoveredFavorites().value());
+        assertEquals("favorites", changes.discoveredFavorites().unit());
+    }
 }
