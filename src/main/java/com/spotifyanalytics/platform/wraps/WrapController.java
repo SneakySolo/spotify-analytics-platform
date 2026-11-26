@@ -23,38 +23,45 @@ public class WrapController {
     private final SpotifyClient spotify;
     private final AnalyticsService analytics;
     private final Duration cacheTtl;
+    private final boolean disableWrapCache;
 
     public WrapController(StringRedisTemplate redis, ObjectMapper mapper, SpotifyClient spotify,
                           AnalyticsService analytics,
-                          @Value("${cache.wrap.ttl:15m}") Duration cacheTtl) {
+                          @Value("${cache.wrap.ttl:15m}") Duration cacheTtl,
+                          @Value("${performance.disable-wrap-cache:false}") boolean disableWrapCache) {
         this.redis = redis;
         this.mapper = mapper;
         this.spotify = spotify;
         this.analytics = analytics;
         this.cacheTtl = cacheTtl;
+        this.disableWrapCache = disableWrapCache;
     }
 
     @PostMapping
     public ResponseEntity<?> generate(OAuth2AuthenticationToken authentication) {
         String key = "spotify_wrap:" + authentication.getName();
-        try {
-            String cached = redis.opsForValue().get(key);
-            if (cached != null) {
-                JsonNode cachedResult = mapper.readTree(cached);
-                return ResponseEntity.ok(cachedResult);
+        if (!disableWrapCache) {
+            try {
+                String cached = redis.opsForValue().get(key);
+                if (cached != null) {
+                    JsonNode cachedResult = mapper.readTree(cached);
+                    return ResponseEntity.ok(cachedResult);
+                }
             }
-        }
-        catch (Exception ignored) {
-            // Redis is an optional performance cache; generate a fresh Wrap if unavailable.
+            catch (Exception ignored) {
+                // Redis is an optional performance cache; generate a fresh Wrap if unavailable.
+            }
         }
 
         try {
             WrapResult result = analytics.analyze(spotify.fetch(authentication));
-            try {
-                redis.opsForValue().set(key, mapper.writeValueAsString(result), cacheTtl);
-            }
-            catch (Exception ignored) {
-                // A cache write failure must not fail Wrap generation.
+            if (!disableWrapCache) {
+                try {
+                    redis.opsForValue().set(key, mapper.writeValueAsString(result), cacheTtl);
+                }
+                catch (Exception ignored) {
+                    // A cache write failure must not fail Wrap generation.
+                }
             }
             return ResponseEntity.ok(result);
         }

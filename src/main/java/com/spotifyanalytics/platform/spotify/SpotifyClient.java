@@ -2,6 +2,15 @@ package com.spotifyanalytics.platform.spotify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.spotifyanalytics.platform.auth.SpotifyTokenService;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.core5.util.Timeout;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -12,25 +21,46 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.function.Supplier;
 
 @Service
 public class SpotifyClient {
+    private static final Logger log = LoggerFactory.getLogger(SpotifyClient.class);
     private final SpotifyTokenService tokens;
-    private final RestClient rest = RestClient.builder().baseUrl("https://api.spotify.com/v1").build();
+    private final CloseableHttpClient httpClient;
+    private final RestClient rest;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     public SpotifyClient(SpotifyTokenService tokens) {
         this.tokens = tokens;
+
+        PoolingHttpClientConnectionManager connectionManager = PoolingHttpClientConnectionManagerBuilder.create()
+                .setMaxConnTotal(50)
+                .setMaxConnPerRoute(20)
+                .build();
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectionRequestTimeout(Timeout.ofSeconds(2))
+                .setResponseTimeout(Timeout.ofSeconds(15))
+                .build();
+        this.httpClient = HttpClients.custom()
+                .setConnectionManager(connectionManager)
+                .setDefaultRequestConfig(requestConfig)
+                .evictExpiredConnections()
+                .build();
+        this.rest = RestClient.builder()
+                .baseUrl("https://api.spotify.com/v1")
+                .requestFactory(new HttpComponentsClientHttpRequestFactory(httpClient))
+                .build();
     }
 
     public SpotifySnapshot fetch(OAuth2AuthenticationToken authentication) {
         String token = tokens.validAccessToken(authentication.getName());
-        Future<SpotifySnapshot.Profile> profile = executor.submit(() -> profile(token));
-        Future<SavedCounts> saved = executor.submit(() -> savedTrackCounts(token));
-        Future<List<SpotifySnapshot.Track>> longTracks = executor.submit(() -> topTracks(token, "long_term"));
-        Future<List<SpotifySnapshot.Track>> shortTracks = executor.submit(() -> topTracks(token, "short_term"));
-        Future<List<SpotifySnapshot.Artist>> artists = executor.submit(() -> topArtists(token));
-        Future<List<SpotifySnapshot.PlayedTrack>> recent = executor.submit(() -> recentlyPlayed(token));
+        Future<SpotifySnapshot.Profile> profile = executor.submit(() -> timed("profile", () -> profile(token)));
+        Future<SavedCounts> saved = executor.submit(() -> timed("saved-track-counts", () -> savedTrackCounts(token)));
+        Future<List<SpotifySnapshot.Track>> longTracks = executor.submit(() -> timed("top-tracks-long-term", () -> topTracks(token, "long_term")));
+        Future<List<SpotifySnapshot.Track>> shortTracks = executor.submit(() -> timed("top-tracks-short-term", () -> topTracks(token, "short_term")));
+        Future<List<SpotifySnapshot.Artist>> artists = executor.submit(() -> timed("top-artists", () -> topArtists(token)));
+        Future<List<SpotifySnapshot.PlayedTrack>> recent = executor.submit(() -> timed("recently-played", () -> recentlyPlayed(token)));
 
         try {
             SavedCounts savedCounts = await(saved);
@@ -46,6 +76,23 @@ public class SpotifyClient {
             recent.cancel(true);
             throw exception;
         }
+    }
+
+    private <T> T timed(String endpoint, Supplier<T> operation) {
+        long started = System.nanoTime();
+        try {
+            T result = operation.get();
+            log.info("spotify_endpoint={} duration_ms={} outcome=success", endpoint, elapsedMillis(started));
+            return result;
+        }
+        catch (RuntimeException exception) {
+            log.info("spotify_endpoint={} duration_ms={} outcome=failure", endpoint, elapsedMillis(started));
+            throw exception;
+        }
+    }
+
+    private long elapsedMillis(long started) {
+        return (System.nanoTime() - started) / 1_000_000;
     }
 
     private <T> T await(Future<T> future) {
@@ -146,6 +193,12 @@ public class SpotifyClient {
     @PreDestroy
     void shutdown() {
         executor.close();
+        try {
+            httpClient.close();
+        }
+        catch (Exception exception) {
+            log.warn("Could not close Spotify HTTP client cleanly.", exception);
+        }
     }
 
     public static class SpotifyException extends RuntimeException {

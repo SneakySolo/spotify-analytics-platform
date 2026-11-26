@@ -44,6 +44,9 @@ cache:
   wrap:
     ttl: ${WRAP_CACHE_TTL:15m}
 
+performance:
+  disable-wrap-cache: ${PERFORMANCE_DISABLE_WRAP_CACHE:false}
+
 encryption:
   key: ${TOKEN_ENCRYPTION_KEY:}
 
