@@ -1,155 +1,296 @@
 # Class and function reference
 
-This inventory covers every application class under `src/main/java/com/spotifyanalytics/platform` and the functions that participate in behavior.
+This reference covers the application classes that do real work in `src/main`. For each entry, **called by** means the important incoming path, and **calls** means the important outgoing collaborators.
 
 ## Application and security
 
 ### `SpotifyAnalyticsApplication`
 
-- `main(String[] args)`: starts Spring Boot with `SpotifyAnalyticsApplication.class`; called by the JVM.
+Path: `com.spotifyanalytics.platform.SpotifyAnalyticsApplication`
+
+- `main(String[] args)`
+  - **Called by:** the JVM.
+  - **Input:** command-line arguments.
+  - **Work:** starts Spring with `SpringApplication.run(...)`.
+  - **Output:** running application context and embedded server.
 
 ### `SecurityConfig`
 
-- constructor: receives `OAuthSuccessHandler` and `OAuthFailureHandler`.
-- `securityFilterChain(HttpSecurity)`: configures CSRF, permitted routes, authentication requirement, OAuth2 login handlers, and logout. Called by Spring during startup.
+Path: `com.spotifyanalytics.platform.security.SecurityConfig`
+
+- constructor(`OAuthSuccessHandler`, `OAuthFailureHandler`)
+  - **Called by:** Spring dependency injection.
+  - **Work:** stores OAuth handlers.
+- `securityFilterChain(HttpSecurity http)`
+  - **Called by:** Spring Security configuration.
+  - **Work:** installs cookie CSRF, public-path rules, authentication for other paths, a 401 entry point for `/wraps`, OAuth handlers, and logout behavior.
+  - **Calls:** `OAuthSuccessHandler`, `OAuthFailureHandler` through the configured filter chain.
+  - **Output:** `SecurityFilterChain` bean.
+
+## Web controllers
 
 ### `PageController`
 
-- `home()`: `GET /` -> view name `index`.
-- `wrap()`: `GET /wrap` -> view name `wrap`.
+Path: `com.spotifyanalytics.platform.web.PageController`
+
+- `home()`
+  - **Called by:** browser `GET /`.
+  - **Work:** selects the Thymeleaf view `index`.
+  - **Output:** `templates/index.html`.
+- `wrap()`
+  - **Called by:** browser `GET /wrap`.
+  - **Work:** selects view `wrap`.
+  - **Output:** `templates/wrap.html`.
 
 ### `MeController`
 
-- `me(Authentication)`: `GET /api/me`; returns 401 for null/anonymous authentication, otherwise 200 with `authenticated` and `spotifyUserId`.
+Path: `com.spotifyanalytics.platform.web.MeController`
+
+- `me(Authentication authentication)`
+  - **Called by:** `index.html` `fetch('/api/me')`.
+  - **Input:** Spring Security authentication, possibly null/anonymous.
+  - **Work:** checks authentication state.
+  - **Output:** 401 `{authenticated:false,...}` or 200 `{authenticated:true, spotifyUserId:...}`.
 
 ### `CsrfController`
 
-- `csrf(CsrfToken)`: `GET /api/csrf`; returns Spring's CSRF token unchanged.
+Path: `com.spotifyanalytics.platform.web.CsrfController`
+
+- `csrf(CsrfToken token)`
+  - **Called by:** `wrap.html` `GET /api/csrf`.
+  - **Input:** Spring's generated `CsrfToken`.
+  - **Work:** returns it unchanged.
+  - **Output:** JSON token/header name for the next POST.
+
+### `WrapController`
+
+Path: `com.spotifyanalytics.platform.wraps.WrapController`
+
+- constructor(`StringRedisTemplate`, `ObjectMapper`, `SpotifyClient`, `AnalyticsService`, `Duration cacheTtl`, `boolean disableWrapCache`)
+  - **Called by:** Spring dependency injection.
+  - **Input:** cache, JSON mapper, Spotify client, analytics service, `cache.wrap.ttl`, and `performance.disable-wrap-cache`.
+  - **Work:** stores collaborators and runtime cache settings.
+- `generate(OAuth2AuthenticationToken authentication)`
+  - **Called by:** authenticated browser `POST /wraps` after the Security filter chain has accepted auth and CSRF.
+  - **Input:** OAuth2 principal; its name is the Spotify user id.
+  - **Work:** builds `spotify_wrap:<user id>`; reads Redis unless cache is disabled; parses a cache hit; on miss calls `SpotifyClient.fetch`, then `AnalyticsService.analyze`; writes successful JSON to Redis with TTL unless disabled.
+  - **Output:** 200 cached JSON or `WrapResult`; 401 `reauth_required`; 502 `spotify_error`; 500 `generation_failed`.
+  - **Calls:** `StringRedisTemplate`, `ObjectMapper`, `SpotifyClient.fetch`, `AnalyticsService.analyze`.
 
 ### `ApiExceptionHandler`
 
-- `reauth(ReauthRequiredException)`: maps to 401 with `REAUTH_REQUIRED`.
-- `spotify(SpotifyException)`: maps retryable errors to 503 and other Spotify errors to 502.
-- `generic(Exception)`: maps unknown errors to 500 with `WRAP_ERROR`.
+Path: `com.spotifyanalytics.platform.web.ApiExceptionHandler`
 
-`WrapController` catches its own expected exceptions, so these methods are fallback mappings rather than the normal local path for `/wraps`.
+- `reauth(ReauthRequiredException)` -> 401 with `REAUTH_REQUIRED`.
+- `spotify(SpotifyException)` -> 503 when `retryable()` is true, otherwise 502, with `SPOTIFY_ERROR`.
+- `generic(Exception)` -> 500 with `WRAP_ERROR`.
 
-## OAuth, tokens, and persistence
+These are `@RestControllerAdvice` fallbacks. `WrapController.generate` catches its known exceptions locally first.
+
+## OAuth and token classes
 
 ### `OAuthSuccessHandler`
 
-- `onAuthenticationSuccess(HttpServletRequest, HttpServletResponse, Authentication)`: casts to `OAuth2AuthenticationToken`; loads the authorized client; reads Spotify `id`; encrypts access/refresh tokens; upserts `SpotifyConnection` through `SpotifyConnectionRepository`; redirects to `/wrap?autogenerate=1`.
+Path: `com.spotifyanalytics.platform.auth.OAuthSuccessHandler`
 
-Calls `OAuth2AuthorizedClientService.loadAuthorizedClient`, `TokenCryptoService.encrypt`, repository `findById`, `SpotifyConnection.updateTokens`, and repository `save`.
+- `onAuthenticationSuccess(HttpServletRequest, HttpServletResponse, Authentication)`
+  - **Called by:** Spring OAuth2 login success flow.
+  - **Input:** `OAuth2AuthenticationToken`.
+  - **Work:** loads the authorized Spotify client; reads profile id/display name; encrypts access/refresh tokens; finds or creates the connection; saves it; redirects.
+  - **Output:** HTTP redirect to `/wrap?autogenerate=1`.
+  - **Calls:** `OAuth2AuthorizedClientService.loadAuthorizedClient`, `TokenCryptoService.encrypt`, `SpotifyConnectionRepository.findById/save`, `SpotifyConnection.updateTokens`.
 
 ### `OAuthFailureHandler`
 
-- `onAuthenticationFailure(HttpServletRequest, HttpServletResponse, AuthenticationException)`: extracts an OAuth error code if present and redirects to `/wrap?oauth_error=...`.
+Path: `com.spotifyanalytics.platform.auth.OAuthFailureHandler`
 
-### `TokenCryptoService`
-
-- constructor `TokenCryptoService(String encodedKey)`: Base64-decodes the configured key, requiring 32 bytes when nonblank.
-- `encrypt(String plaintext)`: AES/GCM encrypts with a random 12-byte nonce; returns `nonce:ciphertext` Base64 strings.
-- `decrypt(String storedValue)`: splits the stored format, reconstructs GCM parameters, and returns plaintext.
-- `requireKey()`: throws if the configured key was blank.
-
-### `SpotifyConnection`
-
-JPA entity for `spotify_users`; Lombok `@Getter` supplies getters for fields.
-
-- public constructor `(id, name, accessToken, refreshToken, expiresAt)`: creates connected state and timestamps.
-- protected no-arg constructor: required by JPA.
-- `created()`: `@PrePersist`; initializes missing `createdAt` and updates `updatedAt`.
-- `updated()`: `@PreUpdate`; refreshes `updatedAt`.
-- `updateTokens(accessToken, refreshToken, expiresAt)`: replaces access/expiry, replaces refresh only when non-null, marks connected.
-- `disconnect()`: clears ciphertext/expiry and marks disconnected.
-
-### `SpotifyConnectionRepository`
-
-Plain `JpaRepository<SpotifyConnection, String>`. Spring supplies `findById` and `save`; no custom query exists.
+- `onAuthenticationFailure(HttpServletRequest, HttpServletResponse, AuthenticationException)`
+  - **Called by:** Spring OAuth2 login failure flow.
+  - **Input:** authentication exception.
+  - **Work:** extracts an OAuth error code when available, URL-encodes it, and redirects.
+  - **Output:** `/wrap?oauth_error=<code>` or `login_failed`.
 
 ### `SpotifyTokenService`
 
-- constructor: receives repository, crypto, environment; reads `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`.
-- `validAccessToken(String userId)`: loads connection; rejects missing/disconnected; decrypts a token if expiry is more than 60 seconds away; otherwise delegates to `refresh`.
-- `refresh(SpotifyConnection)`: POSTs refresh grant to Spotify Accounts, updates encrypted token state, saves entity, and returns the new access token. `invalid_grant` disconnects and raises `ReauthRequiredException`.
-- nested `ReauthRequiredException`: runtime signal for a missing/expired Spotify connection.
+Path: `com.spotifyanalytics.platform.auth.SpotifyTokenService`
+
+- constructor(`SpotifyConnectionRepository`, `TokenCryptoService`, `Environment`)
+  - **Called by:** Spring.
+  - **Work:** stores repository/crypto and reads `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`.
+- `validAccessToken(String userId)`
+  - **Called by:** `SpotifyClient.fetch`.
+  - **Input:** Spotify user id.
+  - **Work:** loads the row; rejects missing or disconnected state; decrypts a token with more than 60 seconds remaining or refreshes it.
+  - **Output:** raw bearer token or `ReauthRequiredException`.
+  - **Calls:** `SpotifyConnectionRepository.findById`, `TokenCryptoService.decrypt`, `refresh`.
+- `refresh(SpotifyConnection connection)` (private)
+  - **Called by:** `validAccessToken` when expiry is near/missing.
+  - **Input:** connected entity with encrypted refresh token.
+  - **Work:** POSTs Basic-authenticated form data to Spotify `/api/token`; reads token fields; encrypts new tokens; updates and saves the entity. On `invalid_grant`, disconnects it.
+  - **Output:** new raw access token or an exception.
+  - **Calls:** `TokenCryptoService.decrypt/encrypt`, `SpotifyConnection.updateTokens/disconnect`, repository `save`.
+- `ReauthRequiredException(String message)`
+  - Runtime exception used when the user must connect Spotify again.
+
+### `TokenCryptoService`
+
+Path: `com.spotifyanalytics.platform.auth.TokenCryptoService`
+
+- constructor(`String encodedKey`)
+  - **Called by:** Spring with `encryption.key`.
+  - **Work:** Base64-decodes the key and requires exactly 32 bytes; an empty value leaves the key unset until use.
+- `encrypt(String plaintext)`
+  - **Called by:** OAuth success and token refresh.
+  - **Input:** raw token text.
+  - **Work:** AES/GCM/NoPadding, fresh 12-byte nonce, 128-bit tag.
+  - **Output:** `Base64(nonce):Base64(ciphertext+tag)`.
+- `decrypt(String storedValue)`
+  - **Called by:** `SpotifyTokenService.validAccessToken/refresh`.
+  - **Input:** stored two-part ciphertext.
+  - **Work:** decodes nonce/ciphertext and verifies/decrypts GCM data.
+  - **Output:** raw token text.
+- `requireKey()` (private)
+  - **Work:** throws if the configured key is absent.
+
+### `SpotifyConnection`
+
+Path: `com.spotifyanalytics.platform.auth.SpotifyConnection`
+
+JPA entity mapped to `spotify_users`.
+
+- constructor(id, name, accessToken, refreshToken, expiresAt): initializes a connected row and timestamps.
+- `updateTokens(accessToken, refreshToken, expiresAt)`: replaces access token, keeps the old refresh token when the provider did not return a replacement, updates expiry, and marks `CONNECTED`.
+- `disconnect()`: clears both ciphertexts/expiry and marks `DISCONNECTED`.
+- `created()` (`@PrePersist`): fills timestamps.
+- `updated()` (`@PreUpdate`): refreshes `updatedAt`.
+- token/status getters: read values used by `SpotifyTokenService`.
+
+### `SpotifyConnectionRepository`
+
+Path: `com.spotifyanalytics.platform.auth.SpotifyConnectionRepository`
+
+- Extends `JpaRepository<SpotifyConnection, String>`.
+- **Called by:** `OAuthSuccessHandler` and `SpotifyTokenService`.
+- **Important inherited operations:** `findById`, `save`.
+- **Custom queries:** none.
 
 ## Spotify integration
 
 ### `SpotifyClient`
 
-- constructor: receives `SpotifyTokenService`; creates a Spotify `/v1` `RestClient` and a virtual-thread-per-task executor.
-- `fetch(OAuth2AuthenticationToken)`: resolves one access token, submits profile/saved/top/recent tasks, awaits all, and constructs `SpotifySnapshot`; cancels siblings on runtime failure.
-- `await(Future<T>)`: gets a future, preserves interrupt status, unwraps runtime causes, and converts other failures to `SpotifyException`.
-- `profile(String token)`: maps `/me` to `Profile`.
-- `savedTrackCounts(String token)`: pages `/me/tracks` in 50-item pages, counts total and hard-coded 2025/2026 additions.
-- `topTracks(String token, String range)`: calls `/me/top/tracks` for a requested time range and maps tracks.
-- `topArtists(String token)`: calls long-term `/me/top/artists` and maps artists.
-- `recentlyPlayed(String token)`: calls recent-play endpoint and skips records with invalid timestamps.
-- `get(String token, String path)`: sends Bearer GET, parses JSON, retries 429 twice with fixed sleeps, and wraps failures.
-- `artist(JsonNode)`: maps artist ID/name/genres/first image.
-- `track(JsonNode)`: maps track ID/name/duration, first artist, album ID/name/image.
-- `image(JsonNode)`: returns first image URL or null.
-- `shutdown()`: `@PreDestroy`; closes executor.
-- nested `SavedCounts`: internal total/2025/2026 carrier.
-- nested `SpotifyException`: runtime error with message, cause, and `retryable` flag.
+Path: `com.spotifyanalytics.platform.spotify.SpotifyClient`
+
+- constructor(`SpotifyTokenService tokens`)
+  - **Called by:** Spring.
+  - **Work:** creates a shared `RestClient` backed by Apache HttpClient's `PoolingHttpClientConnectionManager` (50 total, 20 per route), 2-second connection-request timeout, 15-second response timeout, and expired-connection eviction; creates a virtual-thread-per-task executor.
+- `fetch(OAuth2AuthenticationToken authentication)`
+  - **Called by:** `WrapController.generate` on a cache miss.
+  - **Input:** authenticated principal.
+  - **Work:** resolves one token, submits five parallel tasks, waits for all, cancels all on failure.
+  - **Output:** `SpotifySnapshot`.
+  - **Calls:** `SpotifyTokenService.validAccessToken`, `profile`, `topTracks` twice, `topArtists`, `recentlyPlayed`, `await`.
+- `timed(String endpoint, Supplier<T> operation)` (private)
+  - **Called by:** each fetch task.
+  - **Work:** logs duration/outcome around the endpoint operation.
+- `elapsedMillis(long started)` (private)
+  - **Work:** converts `System.nanoTime()` difference to milliseconds.
+- `await(Future<T> future)` (private)
+  - **Called by:** `fetch`.
+  - **Work:** gets the result, restores interrupt status, and unwraps runtime causes.
+- `profile(String token)` (private)
+  - **Calls:** `get(token, "/me")`; maps display name and first image.
+- `topTracks(String token, String range)` (private)
+  - **Calls:** `/me/top/tracks` with `time_range` and `limit=50`; maps each item with `track`.
+- `topArtists(String token)` (private)
+  - **Calls:** `/me/top/artists?time_range=long_term&limit=50`; maps each item with `artist`.
+- `recentlyPlayed(String token)` (private)
+  - **Calls:** `/me/player/recently-played?limit=50`; maps track plus `Instant.parse(played_at)` and skips invalid timestamps.
+- `get(String token, String path)` (private)
+  - **Work:** bearer GET, object-JSON validation, three-attempt 429 retry (200/400 ms sleeps), and exception conversion.
+  - **Output:** `JsonNode` or `SpotifyException`.
+- `artist(JsonNode n)` / `track(JsonNode n)` / `image(JsonNode n)` (private)
+  - **Work:** map only the fields the analytics/UI model needs; `track` keeps the first artist and first album image.
+- `shutdown()` (`@PreDestroy`)
+  - **Work:** closes executor and pooled HTTP client.
+- `SpotifyException`
+  - Runtime exception with `retryable()` flag. Current `get` paths mark service/network failures retryable and invalid JSON non-retryable.
 
 ### `SpotifySnapshot`
 
-In-memory record passed from client to analytics. Fields: `Profile`, saved total, 2025/2026 counts, long/short tracks, long-term artists, recent plays.
+Path: `com.spotifyanalytics.platform.spotify.SpotifySnapshot`
 
-- compatibility constructor `(shortTermArtists, mediumTermArtists, longTermArtists, longTermTracks, recentlyPlayed)`: creates a minimal fixture shape, converts tracks to `PlayedTrack` at `Instant.EPOCH`, and does not preserve the unused artist arguments.
-- nested `Profile`, `Artist`, `Album`, `Track`, `PlayedTrack` records hold API data.
-- `Artist` compact constructor converts null genres to an immutable empty list.
-- `Track.album()`: creates an `Album` from the track's album fields.
+- Main record: `profile`, `longTermTracks`, `shortTermTracks`, `longTermArtists`, `recentlyPlayed`.
+- Compatibility constructor: accepts the older artist/track fixture shape and converts tracks to `PlayedTrack` events at `Instant.EPOCH`.
+- `Profile(displayName, imageUrl)`: user profile data.
+- `Artist(id, name, genres, imageUrl)`: copies null genres to an empty immutable list.
+- `Album(id, name, imageUrl)`: album view.
+- `Track(id, name, durationMs, artist, albumId, albumName, imageUrl)`: track data.
+- `Track.album()`: creates an `Album` from track album fields.
+- `PlayedTrack(track, playedAt)`: one recent listening event.
 
-## Wrap endpoint and analytics
-
-### `WrapController`
-
-- constructor: injects `StringRedisTemplate`, `ObjectMapper`, `SpotifyClient`, `AnalyticsService`, and `cache.wrap.ttl` defaulting to `15m`.
-- `generate(OAuth2AuthenticationToken)`: `POST /wraps`; reads cache; on miss fetches and analyzes; attempts cache write; returns 200/401/502/500 response bodies. Redis failures are ignored.
+## Analytics and response model
 
 ### `AnalyticsService`
 
-- `analyze(SpotifySnapshot)`: orchestrates all calculations and creates `WrapResult`.
-- `libraryGrowth(SpotifySnapshot)`: private year comparison and trend/note construction.
-- `countMetric(int,String,String)`: private available numeric metric helper.
-- `estimatedTime(List<PlayedTrack>)`: public adjacent-event listening estimate with 30-second tolerance.
-- `estimatedYearListeningTime(List<PlayedTrack>, LocalDate)`: public daily-average annualization through early December or year-end.
-- `genres(List<Artist>)`: private per-artist distinct genre counts, sorted/limited.
-- `hiddenGems(List<Track>,List<Track>)`: private long-term tracks absent from short-term IDs.
-- `diversity(List<Track>)`: private normalized Shannon entropy over artist IDs.
-- `evolution(List<Track>,List<Track>)`: private Jaccard difference percentage.
-- `replay(List<PlayedTrack>)`: private duplicate intensity percentage.
-- `deduplicateRecent(List<PlayedTrack>)`: private null-filter, duplicate-key, chronological sort.
-- `ids(List<Track>)`, `id(Track)`: private ID helpers.
-- `unavailable(String,String)`: private unavailable `Metric` constructor.
-- `safe(List<T>)`: private null-to-empty helper.
-- `normalizeGenre(String)`: public static broad category mapper.
+Path: `com.spotifyanalytics.platform.analytics.AnalyticsService`
 
-### `WrapResult`
-
-Response DTO with profile, saved count, library growth, top tracks/artists, time metrics, distinct counts, hidden gems, scores, and outro.
-
-- constructor: assigns all response fields.
-- nested `Metric`: `(Double value, String unit, boolean available, String note)`.
-- nested `LibraryGrowth`: year counts, difference, trend, availability, note.
-- nested `GenreCount`: genre and artist count.
-- JSON-ignored compatibility accessors: `recentListeningMinutes`, `topArtist`, `topAlbum`, `albumConcentration`, `topGenre`, `risingStar`, `artistLoyalty`, `genreDiversity`, `familiarityRatio`, `discoveryRatio`, `personality`. Several are placeholders: `albumConcentration`/loyalty/ratios return 0, rising star returns null, personality is fixed.
+- `analyze(SpotifySnapshot snapshot)`
+  - **Called by:** `WrapController.generate`.
+  - **Input:** one assembled Spotify snapshot.
+  - **Work:** null-protects lists, deduplicates recent events, limits displayed rankings, and computes all `WrapResult` fields.
+  - **Output:** `WrapResult`.
+  - **Calls:** `estimatedTime`, `estimatedYearListeningTime`, `listeningRoutine`, `comfortArtist`, `genres`, `hiddenGems`, `diversity`, `tasteChanges`, `replay`.
+- `countMetric(int value, String unit, String note)` (private): wraps a number as an available `Metric`.
+- `listeningRoutine(List<PlayedTrack>)` (private): counts UTC hour/day and chooses the highest count.
+- `comfortArtist(List<PlayedTrack>)` (private): groups recent artists by id/name and returns the largest group plus percentage.
+- `estimatedTime(List<PlayedTrack>)`
+  - **Input:** recent events.
+  - **Work:** sums plausible adjacent intervals, capped by current track duration; uses 30-second tolerance.
+  - **Output:** estimated-millisecond `Metric`, or unavailable.
+- `estimatedYearListeningTime(List<PlayedTrack>, LocalDate today)`
+  - **Work:** averages observed usable daily time and projects through December 1 or year end after that date.
+  - **Output:** estimated-millisecond `Metric`, or unavailable.
+- `genres(List<Artist>)` (private): counts distinct raw genres per artist, sorts, limits to five.
+- `hiddenGems(List<Track> longTracks, List<Track> shortTracks)` (private): long-term ids absent from short-term ids, max five.
+- `diversity(List<Track>)` (private): normalized Shannon entropy of artist-id counts.
+- `tasteChanges(List<Track> longTracks, List<Track> shortTracks)` (private): Jaccard difference and discovered short-term ids.
+- `replay(List<PlayedTrack>)` (private): repeated-event percentage from valid recent track ids.
+- `deduplicateRecent(List<PlayedTrack>)` (private): removes null/duplicate `track id|timestamp` events and sorts by timestamp.
+- `ids`, `id`, `unavailable`, `safe` (private): set/id, unavailable-metric, and null-list helpers.
+- `normalizeGenre(String genre)` (public static): broad compatibility mapping to Hip-Hop, Pop, Rock, Electronic, or Other.
 
 ### `Personality`
 
-Simple record with `category`, `title`, and `description`. Current `WrapResult.personality()` returns a fixed instance; no scoring logic calls this record.
+Path: `com.spotifyanalytics.platform.analytics.Personality`
 
-## Tests and configuration artifacts
+- Record with `category`, `title`, and `description`.
+- **Called by:** `WrapResult.personality()` compatibility accessor.
+- **Current value:** fixed `WRAP` / `Your Wrap` text; it is not calculated from user data.
 
-- `SpotifyAnalyticsApplicationTests.contextLoads()`: Spring context smoke test.
-- `AnalyticsServiceTest.rankAndPersonalityAreDeterministic()`: compatibility fixture assertions for top artist, normalized genre, fallback recent minutes, album, personality.
-- `AnalyticsServiceTest.genreNormalizationUsesBroadCategories()`: trap and indie pop mappings.
-- `TokenCryptoServiceTest.roundTripUsesUniqueNonce()`: encryption uniqueness and round trips.
-- `application.yaml`: runtime wiring described above.
-- `V1__users.sql`: sole database migration.
-- `templates/index.html` and `templates/wrap.html`: browser entry, CSRF fetch, generation call, formatting, rendering, and carousel behavior.
+### `WrapResult`
 
+Path: `com.spotifyanalytics.platform.analytics.WrapResult`
+
+- Constructor: receives profile, top-five tracks/artists, metrics, genre counts, hidden gems, routine, comfort artist, taste changes, replay, and outro.
+- Public response fields: `profile`, `topTracks`, `topArtists`, `estimatedListeningTime`, `estimatedYearListeningTime`, `totalTracksListened`, `totalAlbumsListened`, `listeningRoutine`, `comfortArtist`, `hiddenGems`, `tasteDiversityScore`, `tasteChanges`, `replayIntensityScore`, `outro`.
+- `topGenres`: populated but `@JsonIgnore`, so omitted from HTTP JSON.
+- Nested records: `Metric(value, unit, available, note)`, `TasteChanges`, `ListeningRoutine`, `ComfortArtist`, and `GenreCount`.
+- Compatibility accessors: `recentListeningMinutes`, `topArtist`, `topAlbum`, `topGenre`, `genreDiversity`, and `personality` provide older callers a view of the new fields; `albumConcentration`, `artistLoyalty`, `familiarityRatio`, and `discoveryRatio` return `0`, and `risingStar` returns `null`.
+
+## Persistence and infrastructure files
+
+### `V1__users.sql`
+
+Creates `spotify_users` with encrypted access/refresh token columns, expiry, connection status, and timestamps. It is run by Flyway, not by application Java code.
+
+### `templates/index.html`
+
+Home page. Its inline JavaScript checks `/api/me`, then routes to `/wrap` or OAuth.
+
+### `templates/wrap.html`
+
+Wrap page. Its inline JavaScript obtains CSRF, posts `/wraps`, parses JSON, escapes text, creates 13 cards, and handles navigation/errors.
+
+### `performance/k6/uncached-wrap.js`
+
+Load-test client, not server code. It posts `/wraps` with a supplied session cookie and `X-XSRF-TOKEN`; its name reflects the recommended `PERFORMANCE_DISABLE_WRAP_CACHE=true` mode.

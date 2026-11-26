@@ -1,80 +1,136 @@
 # Interview quick recall
 
-These answers describe the current repository, including limitations. Do not claim features that are absent.
+Use these answers as a compact, code-backed explanation of the current repository. They describe what exists today, including deliberate limits and compatibility leftovers.
 
 ## Architecture
 
-**What is the architecture?** A synchronous Spring Boot modular monolith. Web, auth, persistence, Spotify integration, caching, and analytics are modules in one process. A Wrap request is not a job submitted to a queue.
+### What is the architecture?
 
-**What starts the app?** `SpotifyAnalyticsApplication.main` calls `SpringApplication.run`. Flyway creates `spotify_users`; JPA validates the schema; Spring wires controllers/services/security; the server listens on `PORT` or 8080.
+It is a Spring Boot 3.2.5 / Java 21 modular monolith. Web controllers, OAuth, token persistence, Spotify integration, analytics, and Redis caching run in one process. The app handles a Wrap synchronously in `POST /wraps`.
 
-**Why is Redis separate from Postgres?** Postgres durably stores encrypted Spotify connection state. Redis stores derived `WrapResult` JSON for a default 15-minute TTL. Losing Redis regenerates data; losing the encryption key makes stored tokens undecryptable.
+### What happens on a normal request?
 
-## Request tracing
+The browser loads `/`, checks `/api/me`, completes Spotify OAuth if needed, loads `/wrap`, obtains a CSRF token, and posts `/wraps`. `WrapController` checks a user-keyed Redis cache, then calls `SpotifyClient.fetch`, `AnalyticsService.analyze`, and returns `WrapResult` JSON.
 
-**What happens after clicking the home button?** `index.html` calls `/api/me`. Anonymous users start `/oauth2/authorization/spotify`; authenticated users open `/wrap`. `wrap.html` obtains `/api/csrf`, then POSTs `/wraps`.
+### Why is generation synchronous?
 
-**What protects `/wraps`?** `SecurityConfig.securityFilterChain` requires authentication for non-permitted routes and CSRF protection is enabled. `WrapController` receives `OAuth2AuthenticationToken` only after the filter chain admits the request.
+There is no queue, job table, scheduler, or worker in the code. The caller waits for the five Spotify reads and analytics before receiving the response. This keeps the flow simple, but request latency includes external API time.
 
-**What is the cache key?** `spotify_wrap:` plus `authentication.getName()`. Because the Spotify provider uses `user-name-attribute: id`, this is the Spotify user ID, not browser input.
+## Security and tokens
 
-**Does a cache hit call Spotify?** No. It returns parsed Redis JSON before token lookup, refresh, Spotify calls, or analytics.
+### How is `/wraps` protected?
 
-## OAuth and tokens
+`SecurityConfig` requires authentication for every non-public path and uses cookie-based CSRF. The page calls `/api/csrf` and sends the returned header on `POST /wraps`. An unauthenticated `/wraps` request is stopped with 401 before the controller.
 
-**Where are tokens stored?** `SpotifyConnection` maps to `spotify_users`; access and refresh tokens are ciphertext. `OAuthSuccessHandler` creates or updates the row.
+### What identifies a user?
 
-**How are tokens encrypted?** `TokenCryptoService` uses AES/GCM/NoPadding, AES-256 from a 32-byte Base64 key, and a fresh 12-byte nonce per encryption. The stored format is Base64 nonce plus Base64 ciphertext/tag.
+Spotify's provider config sets `user-name-attribute: id`, so `OAuth2AuthenticationToken.getName()` is the Spotify user id. It is the Postgres primary key and the suffix in `spotify_wrap:<id>`.
 
-**When does refresh happen?** `SpotifyTokenService.validAccessToken` decrypts the access token only when its expiry is more than 60 seconds away. Otherwise `refresh` posts a refresh grant to Spotify and saves the new encrypted token.
+### How are OAuth tokens stored?
 
-**What happens on `invalid_grant`?** The connection is disconnected, ciphertext and expiry are cleared, and a reauth-required error becomes HTTP 401 from `WrapController`.
+`TokenCryptoService` encrypts them with AES/GCM/NoPadding using a Base64-encoded 32-byte key, a new 12-byte nonce per encryption, and a 128-bit tag. The database stores `Base64(nonce):Base64(ciphertext+tag)`, never the raw token.
 
-## Spotify and performance
+### What happens if the encryption key changes?
 
-**How many Spotify calls happen on a cold miss?** Six logical tasks: profile, saved tracks, long-term top tracks, short-term top tracks, long-term top artists, and recently played. Saved tracks may make multiple paged calls.
+Existing ciphertext cannot be decrypted, so token use fails. The key must remain stable for the lifetime of the stored connections. An empty key can let startup complete, but the first encrypt/decrypt call throws.
 
-**Why virtual threads?** The code uses Java 21 `newVirtualThreadPerTaskExecutor()` around blocking `RestClient` calls. It overlaps independent network waits while keeping imperative code. It is not WebFlux and is not a Spring-managed executor.
+### How does refresh work?
 
-**Are calls truly asynchronous to the user?** No. The endpoint is synchronous and calls `Future.get()` for all required results. The browser waits for the complete Wrap.
+`SpotifyTokenService.validAccessToken` decrypts a stored access token only when it has more than 60 seconds left. Otherwise `refresh` sends a Basic-authenticated refresh-token request to Spotify, saves the new encrypted values, and returns the new access token. `invalid_grant` clears the row and returns a reauthentication response.
 
-**What happens if one Spotify call fails?** `await` propagates the failure; `fetch` cancels sibling futures; no partial snapshot is returned. The controller maps `SpotifyException` to 502.
+## Performance and concurrency
 
-**How are 429s handled?** `SpotifyClient.get` retries up to three attempts with fixed 200 ms and 400 ms sleeps. It does not use Spotify's `Retry-After` header, jitter, circuit breaking, or a global rate limiter.
+### What is parallel in this app?
 
-## Analytics honesty
+`SpotifyClient.fetch` submits five independent Spotify calls to `Executors.newVirtualThreadPerTaskExecutor`: profile, long-term tracks, short-term tracks, long-term artists, and recently played. It waits for all five and cancels the remaining futures if one fails.
 
-**Is listening time exact?** No. `estimatedTime` infers plausible adjacent intervals from recent-play timestamps and caps each interval at the current track duration. Annual time averages observed UTC-day estimates and projects them through December 1 or the end of the year.
+### Why use virtual threads?
 
-**What does replay intensity mean?** `(valid recent events - distinct track IDs) / valid recent events * 100`. It is repetition in the available 50-item recent sample, not Spotify play counts.
+These tasks spend most of their time waiting on HTTP. Virtual threads allow the blocking client calls to run concurrently with low thread overhead. They do not make Spotify itself faster, and the request still waits for the slowest task.
 
-**How are taste scores calculated?** Diversity is normalized Shannon entropy over artist IDs in long-term top tracks. Evolution is `100 * (1 - intersection/union)` of long- and short-term track IDs. Empty inputs produce unavailable metrics where implemented.
+### Is the HTTP client pooled?
 
-**Is genre data in the response?** `AnalyticsService` computes `topGenres`, but `WrapResult.topGenres` is `@JsonIgnore`, and the current template does not render it.
+Yes. `SpotifyClient` creates one Apache HttpClient 5 `PoolingHttpClientConnectionManager` with 50 total connections and 20 per route. The shared `RestClient` reuses those connections, has a 2-second connection-request timeout and 15-second response timeout, and evicts expired connections. This is separate from the framework-managed database data source, whose pool size is not configured in this repository.
 
-**What is stubbed?** Compatibility methods on `WrapResult`: album concentration, rising star, artist loyalty, familiarity ratio, and discovery ratio return `0`/`null`. `personality()` returns a fixed `Personality`, not a data-driven classification.
+### How does load testing bypass cache?
 
-## Failure and edge cases
+Set `PERFORMANCE_DISABLE_WRAP_CACHE=true`. `WrapController` then skips both Redis GET and SET, so each request measures token handling, Spotify calls, and analytics. The default is false, which is the normal user-facing mode.
 
-**What if Redis is down?** GET/parse failures are swallowed, so the request generates fresh data. SET failures are swallowed, so the current response still succeeds. This preserves availability but can hide cache degradation and permit repeated upstream calls.
+### What are the rate-limit semantics?
 
-**What if tokens are missing?** Missing row or `DISCONNECTED` state raises `ReauthRequiredException`, mapped locally to 401.
+`SpotifyClient.get` retries HTTP 429 up to three attempts with 200 ms and 400 ms sleeps. It does not read `Retry-After`. After the final failure it returns `SpotifyException`; the controller responds 502.
 
-**What if the database is down?** Token lookup/refresh fails before Spotify generation and falls into the controller's generic 500 unless the failure is otherwise mapped.
+## Data and analytics
 
-**What if recent data is sparse?** Invalid/null events are discarded. Metrics carry `available=false` and a note; the template renders `Unavailable` or `Not enough data`. The compatibility test's one-event fixture falls back to top-track duration for `recentListeningMinutes`, but the current UI reads the newer metric fields.
+### What data is fetched?
 
-**Are duplicate cold misses prevented?** No. GET then generate then SET has no lock, `SETNX`, or single-flight mechanism. Simultaneous misses can each perform six Spotify fan-out tasks.
+The current client calls `/v1/me`, top tracks for `long_term` and `short_term`, long-term top artists, and recently played tracks. Each asks for at most 50 items. There is no current saved-library `/me/tracks` request or saved-track growth metric.
 
-## Trade-offs and next improvements
+### How is listening time calculated?
 
-**Why no queue?** The product contract is immediate on-demand generation and the code is small. A queue would require job state, polling/status UX, retries, and idempotency. The trade-off is request latency and weaker isolation.
+Recent events are deduplicated and sorted. An adjacent pair is accepted only when its positive gap is no larger than the current track duration plus 30 seconds. The estimate adds the smaller of the gap and duration. The annual metric averages usable observed UTC days and projects through December 1 (or year end after that date). It is an estimate, not Spotify's verified play duration.
 
-**What would you fix first at higher traffic?** Add per-user single-flight/cache locking, bounded concurrency, endpoint timeouts, `Retry-After`-aware backoff, refresh-token serialization/versioning, metrics for cache/error rates, and possibly background generation.
+### What does taste diversity mean here?
 
-**What is the data-retention story?** There is no Wrap history table. Postgres retains connection row/token ciphertext; Redis retains derived JSON only until eviction/TTL. The migration has no RLS or secondary indexes beyond the primary key.
+It is normalized Shannon entropy over artist-id counts in the long-term top-track sample, expressed as a percentage. A single artist scores 0%; missing artist ids make the metric unavailable.
 
-**What tests are missing?** Live OAuth callback, token refresh/invalid grant, Redis hit/miss/TTL, Spotify JSON mapping, controller status codes, 429 retry behavior, cache stampede, and end-to-end authenticated generation. Existing tests cover context startup, crypto round trips/nonce uniqueness, and a small analytics fixture.
+### What does replay intensity mean?
 
-**How would you prove the virtual-thread choice?** Compare against a sequential implementation with the same controlled upstream latency, separately measure cold and warm cache, and report p50/p95/p99, throughput, 429s, errors, Redis hit rate, and connection/heap usage. The repository contains no measured benchmark result proving an improvement.
+It is `(valid recent event count - distinct recent track count) / valid event count * 100`. It measures repetition in the returned recent sample, not actual Spotify play counts.
 
+### Are genres sent to the browser?
+
+`AnalyticsService` calculates up to five raw genre counts, but `WrapResult.topGenres` is annotated `@JsonIgnore`. The current JSON response and UI do not expose them. `normalizeGenre` remains as a compatibility helper and maps broad labels such as trap, pop, rock, and dance.
+
+## Failure handling and trade-offs
+
+### What if Redis is down?
+
+Redis GET/SET exceptions are swallowed in `WrapController`. A read failure becomes a cache miss; a write failure does not fail a successful Wrap. This favors availability, at the cost of doing fresh Spotify work.
+
+### What if one parallel Spotify call fails?
+
+`SpotifyClient.fetch` cancels all five futures and rethrows. The controller returns a 502 for `SpotifyException`; partial snapshots are not analyzed.
+
+### What if recent data is incomplete?
+
+Invalid `played_at` timestamps are skipped. Missing ids, null lists, too few events, or no plausible intervals produce unavailable metrics with explanatory `note` values. The UI renders “Unavailable” or a fallback message.
+
+### What if the access token is missing or disconnected?
+
+`validAccessToken` throws `ReauthRequiredException`; `WrapController` returns 401 with `reauth_required`, and `wrap.html` shows a reconnect action.
+
+### Why are there two exception response mechanisms?
+
+`ApiExceptionHandler` declares global advice mappings, while `WrapController.generate` catches its own known exceptions and returns local maps. For `/wraps`, the local controller mappings normally win. This duplication is a maintenance smell worth mentioning in an interview.
+
+### What are the main trade-offs?
+
+- Synchronous generation is easy to follow and returns a complete result, but external latency is on the request path.
+- Five parallel reads reduce wall-clock time, but increase concurrent load against Spotify and depend on rate limits.
+- A pooled shared HTTP client avoids connection setup per call, while fixed pool limits can still become a bottleneck under enough simultaneous users.
+- Redis improves repeat latency but is intentionally disposable; it is not the source of truth.
+- Encrypted tokens improve database safety, but key loss makes existing connections unusable.
+- The code asks for fixed 50-item samples and does not paginate these endpoints, so analytics are based on a bounded sample.
+
+## Code-quality details to be ready to explain
+
+### Why is `open-in-view` false?
+
+The app does not rely on a database session remaining open through view rendering. The result is assembled before the controller returns.
+
+### What does shutdown do?
+
+`SpotifyClient.shutdown()` closes the virtual-thread executor and pooled Apache HTTP client through `@PreDestroy`, preventing those resources from outliving the Spring context.
+
+### What is deliberately incomplete or legacy?
+
+`WrapResult` keeps compatibility accessors from the earlier API. `albumConcentration`, `artistLoyalty`, `familiarityRatio`, and `discoveryRatio` return 0; `risingStar` returns null; `personality()` returns fixed text. `topGenres` is calculated but ignored during JSON serialization. These are facts to call out rather than presenting them as richer behavior than the code provides.
+
+### What tests exist?
+
+The tests cover context startup, AES-GCM round trips with unique nonces, genre normalization, ranking/personality compatibility, taste-change math, and recent-listening fixture behavior. There are no repository-wide integration tests for real Spotify, Redis, or the parallel HTTP client.
+
+## A short interview answer
+
+“This is a Java 21 Spring Boot modular monolith. OAuth creates a session and stores encrypted Spotify tokens in Postgres. A CSRF-protected `/wraps` request first checks a user-scoped Redis cache. On a miss, one shared pooled Apache HTTP client makes five Spotify reads concurrently on virtual threads. The results become a `SpotifySnapshot`, `AnalyticsService` turns that into a `WrapResult`, and the JSON is returned and optionally cached. The design is intentionally synchronous and sample-based: there is no background job, the five Spotify endpoints are limited to 50 items each, and cache loss simply causes regeneration.”

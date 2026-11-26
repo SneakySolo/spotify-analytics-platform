@@ -1,189 +1,215 @@
-# A–Z walkthrough: one Spotify Wrap request
+# A-Z walkthrough: one Spotify Wrap request
 
-This is the execution trace for the code in `src/main`. It describes what the repository actually does today. The important boundary is that a Wrap is generated synchronously on `POST /wraps`; there is no queue, scheduler, event listener, or background worker.
+This is the current execution trace from the source under `src/main`. A Wrap is generated synchronously by `POST /wraps`. There is no queue, scheduled job, event consumer, or background worker. Spotify reads are parallel inside that request, and the Redis result cache can avoid them on later requests.
 
 ## Call-chain tree
 
 ```text
-Browser /
-├─ GET /                         -> PageController.home() -> index.html
-├─ click #start-wrap             -> GET /api/me -> MeController.me()
-│  ├─ authenticated              -> browser navigates /wrap?autogenerate=1
-│  └─ not authenticated          -> browser navigates /oauth2/authorization/spotify
-│     └─ Spring OAuth2 login      -> Spotify -> /login/oauth2/code/spotify
-│        -> OAuthSuccessHandler.onAuthenticationSuccess()
-│           -> OAuth2AuthorizedClientService.loadAuthorizedClient()
-│           -> TokenCryptoService.encrypt()
-│           -> SpotifyConnectionRepository.findById()/save()
-│           -> redirect /wrap?autogenerate=1
-└─ GET /wrap                     -> PageController.wrap() -> wrap.html
-   └─ JavaScript generate()
-      -> GET /api/csrf            -> CsrfController.csrf()
-      -> POST /wraps              -> WrapController.generate()
-         ├─ Redis GET spotify_wrap:<spotify user id>
-         ├─ cache hit              -> parse JSON -> HTTP 200
-         └─ cache miss              -> SpotifyClient.fetch()
-            -> SpotifyTokenService.validAccessToken()
-               ├─ unexpired token  -> TokenCryptoService.decrypt()
-               └─ expired token    -> refresh() -> Spotify /api/token
-                  -> repository save
-            -> six virtual-thread tasks:
-               ├─ profile()          -> GET Spotify /v1/me
-               ├─ savedTrackCounts() -> GET /v1/me/tracks (paged)
-               ├─ topTracks(long)    -> GET /v1/me/top/tracks
-               ├─ topTracks(short)   -> GET /v1/me/top/tracks
-               ├─ topArtists()       -> GET /v1/me/top/artists
-               └─ recentlyPlayed()   -> GET /v1/me/player/recently-played
-            -> await() all futures -> SpotifySnapshot
-            -> AnalyticsService.analyze(snapshot)
-               -> WrapResult
-            -> Jackson serialize -> Redis SET with TTL -> HTTP 200 JSON
+JVM
+`-- SpotifyAnalyticsApplication.main()
+    `-- SpringApplication.run()
+        `-- SecurityFilterChain + controllers + services + repositories
+
+Browser GET /
+`-- PageController.home() -> templates/index.html
+    `-- GET /api/me -> MeController.me()
+        |-- already authenticated -> GET /wrap?autogenerate=1
+        `-- anonymous -> /oauth2/authorization/spotify
+            `-- Spotify consent and code exchange
+                `-- /login/oauth2/code/spotify
+                    `-- OAuthSuccessHandler.onAuthenticationSuccess()
+                        `-- OAuth2AuthorizedClientService.loadAuthorizedClient()
+                        `-- TokenCryptoService.encrypt()
+                        `-- SpotifyConnectionRepository.findById()/save()
+                        `-- redirect to /wrap?autogenerate=1
+
+Browser GET /wrap
+`-- PageController.wrap() -> templates/wrap.html
+    `-- JavaScript generate()
+        |-- GET /api/csrf -> CsrfController.csrf()
+        `-- POST /wraps (session + CSRF header)
+            `-- WrapController.generate()
+                |-- Redis GET spotify_wrap:<spotify user id> (unless cache disabled)
+                |   `-- hit -> cached JSON HTTP 200
+                `-- miss/error -> SpotifyClient.fetch()
+                    |-- SpotifyTokenService.validAccessToken()
+                    |   `-- decrypt stored token OR refresh at Spotify /api/token
+                    |-- five virtual-thread tasks in parallel
+                    |   |-- GET /v1/me
+                    |   |-- GET /v1/me/top/tracks?time_range=long_term&limit=50
+                    |   |-- GET /v1/me/top/tracks?time_range=short_term&limit=50
+                    |   |-- GET /v1/me/top/artists?time_range=long_term&limit=50
+                    |   `-- GET /v1/me/player/recently-played?limit=50
+                    |-- await all futures -> SpotifySnapshot
+                    `-- AnalyticsService.analyze(snapshot) -> WrapResult
+                        `-- Jackson JSON + optional Redis SET -> HTTP 200
 ```
 
-## 1. Application starts
+## 1. The application starts
 
 **Caller -> Callee:** JVM -> `SpotifyAnalyticsApplication.main(String[] args)`  
 **Takes in:** command-line arguments.  
-**Does:** calls `SpringApplication.run(SpotifyAnalyticsApplication.class, args)`. Spring Boot discovers the `@SpringBootApplication`, creates beans, configures the embedded web server, JPA, Redis, Flyway, Thymeleaf, OAuth2 client, and Spring Security.  
-**Returns/passes next:** a running application context and HTTP server, normally on `server.port`, default `8080`.
+**Does:** calls `SpringApplication.run(SpotifyAnalyticsApplication.class, args)`. Spring Boot creates the application context, embedded server, MVC controllers, Security filter chain, JPA/Flyway database wiring, Redis client, OAuth client, Thymeleaf renderer, and service beans.  
+**Returns/passes next:** a running HTTP application, port `8080` by default (`server.port` comes from `PORT`).
 
-At startup, `application.yaml` reads `DATABASE_URL`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `REDIS_URL`, `SPOTIFY_*`, `TOKEN_ENCRYPTION_KEY`, `WRAP_CACHE_TTL`, `THYMELEAF_CACHE`, and `PORT`, supplying local defaults for most non-secret values. Flyway runs `db/migration/V1__users.sql`, creating `spotify_users`; JPA uses `ddl-auto: validate`, so it validates rather than creates the schema. `TokenCryptoService` rejects a present encryption key unless it is Base64 that decodes to exactly 32 bytes, but an empty key is allowed until encryption/decryption is attempted.
+`application.yaml` supplies PostgreSQL (`DATABASE_URL`, username, password), Redis (`REDIS_URL`), Spotify OAuth values, `WRAP_CACHE_TTL`, `PERFORMANCE_DISABLE_WRAP_CACHE`, `THYMELEAF_CACHE`, `TOKEN_ENCRYPTION_KEY`, and `PORT`. Flyway runs `V1__users.sql`, which creates the `spotify_users` table. Hibernate is set to `ddl-auto: validate`, so JPA validates the schema rather than creating it. The JPA starter supplies the normal Spring Boot JDBC data-source setup; this repository does not set explicit Hikari pool sizes.
+
+`TokenCryptoService` validates a non-empty encryption key at bean construction: it must be Base64 that decodes to exactly 32 bytes. An empty key does not fail startup, but any later encrypt/decrypt call fails with `TOKEN_ENCRYPTION_KEY is required`.
 
 ## 2. The browser opens the home page
 
 **Caller -> Callee:** browser `GET /` -> `PageController.home()`  
-**Takes in:** no application arguments.  
+**Takes in:** no application parameters.  
 **Does:** returns the Thymeleaf view name `index`.  
-**Returns/passes next:** Spring renders `templates/index.html` as HTML.
+**Returns/passes next:** `templates/index.html` is rendered.
 
-Before the controller, `SecurityConfig.securityFilterChain(HttpSecurity)` has configured CSRF using `CookieCsrfTokenRepository.withHttpOnlyFalse()` and has permitted `/`, `/wrap`, `/api/me`, `/api/csrf`, static assets, OAuth paths, and `/actuator/health`. Therefore this page request is allowed without a login.
+`SecurityConfig.securityFilterChain(HttpSecurity)` permits `/`, `/wrap`, `/api/me`, `/api/csrf`, `/css/**`, `/js/**`, `/oauth2/**`, `/login/**`, and `/actuator/health`. The page is therefore visible before login.
 
-`index.html` has a `#start-wrap` button. Its JavaScript first calls `fetch("/api/me")`. If the response is successful and the JSON field `authenticated` is true, it navigates to `/wrap?autogenerate=1`; otherwise it navigates to `/oauth2/authorization/spotify`. A network error also starts OAuth.
+The `#start-wrap` button in `index.html` calls `fetch('/api/me')`. A successful authenticated response sends the browser to `/wrap?autogenerate=1`. Any unauthenticated response or fetch failure sends it to `/oauth2/authorization/spotify`.
 
-## 3. The browser checks the current login
+## 3. The browser checks login state
 
-**Caller -> Callee:** `index.html` `fetch` -> `MeController.me(Authentication authentication)`  
-**Takes in:** Spring Security's `Authentication`, which may be null, anonymous, or authenticated.  
-**Does:** rejects null, unauthenticated, and `AnonymousAuthenticationToken`; otherwise exposes the authenticated principal name.  
-**Returns/passes next:** HTTP `401` with `{authenticated:false,message:...}` or HTTP `200` with `{authenticated:true,spotifyUserId:...}`.
+**Caller -> Callee:** `index.html` `fetch('/api/me')` -> `MeController.me(Authentication authentication)`  
+**Takes in:** Spring Security's `Authentication`, which can be null, anonymous, or authenticated.  
+**Does:** treats null, `!isAuthenticated()`, and `AnonymousAuthenticationToken` as not connected.  
+**Returns/passes next:** HTTP `401` with `{"authenticated":false,"message":"Connect Spotify to continue."}`, or HTTP `200` with `{"authenticated":true,"spotifyUserId":authentication.getName()}`.
 
-`/api/me` is explicitly permitted, so the controller itself makes the login decision.
+The identity is the Spotify user id because the OAuth provider sets `user-name-attribute: id`.
 
-## 4. OAuth login and token persistence
+## 4. OAuth connects Spotify and stores tokens
 
-**Caller -> Callee:** browser `/oauth2/authorization/spotify` -> Spring Security OAuth2 client filter chain  
-**Takes in:** the configured Spotify registration from `application.yaml`: authorization code grant, scopes `user-read-private,user-read-email,user-top-read,user-read-recently-played,user-library-read`, and the configured redirect URI.  
-**Does:** redirects to Spotify; after consent, Spring exchanges the authorization code using Spotify's token endpoint and builds an `OAuth2AuthenticationToken`.  
-**Returns/passes next:** the callback enters Spring Security's success or failure handler.
+**Caller -> Callee:** browser `/oauth2/authorization/spotify` -> Spring Security OAuth2 client flow  
+**Takes in:** the `spotify` registration from `application.yaml`: authorization-code grant, configured client id/secret/redirect URI, and scopes `user-read-private`, `user-read-email`, `user-top-read`, and `user-read-recently-played`.  
+**Does:** redirects to Spotify; Spotify returns an authorization code; Spring exchanges it at `https://accounts.spotify.com/api/token`, loads the user profile from `https://api.spotify.com/v1/me`, and creates the authenticated session.  
+**Returns/passes next:** success or failure handler execution.
 
-**Caller -> Callee:** Spring OAuth2 success flow -> `OAuthSuccessHandler.onAuthenticationSuccess(HttpServletRequest, HttpServletResponse, Authentication)`  
-**Takes in:** the authenticated `OAuth2AuthenticationToken`.  
-**Does:** loads the authorized client with `OAuth2AuthorizedClientService.loadAuthorizedClient("spotify", login.getName())`; reads the Spotify user `id` from `OAuth2User`; encrypts the access token and optional refresh token with `TokenCryptoService.encrypt`; finds the row with `SpotifyConnectionRepository.findById`; inserts a new `SpotifyConnection` or calls `SpotifyConnection.updateTokens`; saves it.  
-**Returns/passes next:** HTTP redirect to `/wrap?autogenerate=1`. A missing Spotify `id` throws `IllegalStateException`.
+**Caller -> Callee:** Spring success flow -> `OAuthSuccessHandler.onAuthenticationSuccess(...)`  
+**Takes in:** an `OAuth2AuthenticationToken`.  
+**Does:** calls `OAuth2AuthorizedClientService.loadAuthorizedClient("spotify", login.getName())`; reads `id` and `display_name` from `OAuth2User`; encrypts the access token and optional refresh token; looks up `SpotifyConnectionRepository.findById(userId)`; inserts a new `SpotifyConnection` or calls `SpotifyConnection.updateTokens(...)`; saves it.  
+**Returns/passes next:** redirect to `/wrap?autogenerate=1`. A missing Spotify `id` throws `IllegalStateException`.
 
 **Caller -> Callee:** `OAuthSuccessHandler` -> `TokenCryptoService.encrypt(String plaintext)`  
-**Takes in:** a raw OAuth access or refresh token.  
-**Does:** requires the 32-byte key, creates a fresh 12-byte random nonce, encrypts with `AES/GCM/NoPadding` and a 128-bit tag.  
-**Returns/passes next:** `Base64(nonce):Base64(ciphertext+tag)` stored in Postgres.
+**Takes in:** a raw OAuth token.  
+**Does:** uses AES/GCM/NoPadding with a fresh 12-byte random nonce and a 128-bit authentication tag.  
+**Returns/passes next:** `Base64(nonce):Base64(ciphertext+tag)`, stored in Postgres columns `access_token_ciphertext` and `refresh_token_ciphertext`.
 
-**Caller -> Callee:** Spring OAuth2 failure flow -> `OAuthFailureHandler.onAuthenticationFailure(...)`  
+**Caller -> Callee:** Spring failure flow -> `OAuthFailureHandler.onAuthenticationFailure(...)`  
 **Takes in:** an `AuthenticationException`.  
-**Does:** extracts an OAuth error code when available, otherwise uses `login_failed`, URL-encodes it.  
-**Returns/passes next:** redirects to `/wrap?oauth_error=<code>`.
+**Does:** uses the OAuth error code when available, otherwise `login_failed`, URL-encodes it, and redirects.  
+**Returns/passes next:** `/wrap?oauth_error=<code>`.
 
-## 5. The wrap page loads
+## 5. The Wrap page loads
 
 **Caller -> Callee:** browser `GET /wrap` -> `PageController.wrap()`  
 **Takes in:** no controller argument.  
-**Does:** returns the Thymeleaf view name `wrap`.  
-**Returns/passes next:** renders `templates/wrap.html`; its JavaScript immediately calls `generate()` regardless of the query string.
+**Does:** returns the view name `wrap`.  
+**Returns/passes next:** `templates/wrap.html` is rendered.
 
-## 6. CSRF is obtained before the write request
+The `autogenerate` query parameter is used only by the redirect URL; the current page script does not inspect it. Unless `oauth_error` is present, the script calls `generate()` on every page load.
+
+## 6. The page obtains CSRF and posts the generation request
 
 **Caller -> Callee:** `wrap.html` `csrf()` -> `CsrfController.csrf(CsrfToken token)`  
-**Takes in:** the CSRF token supplied by Spring Security.  
-**Does:** returns it unchanged.  
-**Returns/passes next:** JSON containing the token header name and token value; the browser uses that object as headers for `POST /wraps`.
+**Takes in:** the CSRF token created by Spring Security.  
+**Does:** returns the token object unchanged.  
+**Returns/passes next:** JSON containing the token value and header name; JavaScript uses that header on the POST.
 
-## 7. Security filters protect generation
+**Caller -> Callee:** browser `POST /wraps` -> Spring Security filter chain -> `WrapController.generate(...)`  
+**Takes in:** the authenticated session, OAuth2 principal, and CSRF header/cookie pair.  
+**Does:** the filter chain requires authentication for `/wraps` and rejects a missing or invalid CSRF token before controller code runs.  
+**Returns/passes next:** a valid request reaches `generate`; an unauthenticated request receives `401` from the configured `HttpStatusEntryPoint`.
 
-**Caller -> Callee:** HTTP request -> Spring Security filter chain built by `SecurityConfig.securityFilterChain(HttpSecurity)`  
-**Takes in:** method, path, session, authentication, CSRF cookie/header.  
-**Does:** permits the public paths listed in `SecurityConfig`; requires authentication for everything else, including `/wraps`; checks CSRF on the POST because the repository is configured with a cookie token repository; installs OAuth login handlers and logout behavior.  
-**Returns/passes next:** an authenticated, CSRF-valid request reaches `WrapController.generate`; a failed check is stopped by Spring Security before the controller.
+## 7. `WrapController` checks the Redis result cache
 
-## 8. Cache lookup
+**Caller -> Callee:** `wrap.html` -> `WrapController.generate(OAuth2AuthenticationToken authentication)`  
+**Takes in:** the authenticated principal.  
+**Does:** builds `spotify_wrap:` + `authentication.getName()` as the user-specific key. If `performance.disable-wrap-cache` is false, it calls `redis.opsForValue().get(key)` and parses a hit with `ObjectMapper.readTree`. Redis errors and malformed cached JSON are treated as cache misses. If the value exists, no Spotify or analytics call is made.  
+**Returns/passes next:** cached JSON with HTTP `200`, or the cache-miss path.
 
-**Caller -> Callee:** `wrap.html` `generate()` -> `WrapController.generate(OAuth2AuthenticationToken authentication)`  
-**Takes in:** the authenticated OAuth2 token.  
-**Does:** creates the exact key `spotify_wrap:` + `authentication.getName()`, calls `redis.opsForValue().get(key)`, and if a value exists parses it with `ObjectMapper.readTree`. Redis errors and malformed JSON are swallowed and treated as misses.  
-**Returns/passes next:** cache hit returns parsed JSON immediately with HTTP 200; miss continues to `SpotifyClient.fetch`.
+The property is bound from `PERFORMANCE_DISABLE_WRAP_CACHE`; the default is `false`. With it set to `true`, both the Redis read and write are skipped, so every POST fetches Spotify and recomputes analytics. `WRAP_CACHE_TTL` controls the write TTL and defaults to `15m`.
 
-The cache is not authoritative. A successful result is serialized with `mapper.writeValueAsString(result)` and written using `redis.opsForValue().set(key, json, cacheTtl)`, defaulting to `15m`; a write failure is also ignored.
+## 8. A usable Spotify access token is selected
 
-## 9. Access-token selection and refresh
+**Caller -> Callee:** `WrapController.generate` -> `SpotifyClient.fetch(authentication)` -> `SpotifyTokenService.validAccessToken(String userId)`  
+**Takes in:** `authentication.getName()`, the Spotify user id.  
+**Does:** loads `SpotifyConnectionRepository.findById(userId)`, rejects a missing or `DISCONNECTED` row, and checks expiry. If the access token expires more than 60 seconds from now, it decrypts the stored ciphertext. Otherwise it calls `refresh(connection)`.  
+**Returns/passes next:** a raw access token for the Spotify Web API, or `ReauthRequiredException`.
 
-**Caller -> Callee:** `WrapController.generate` -> `SpotifyClient.fetch(OAuth2AuthenticationToken)` -> `SpotifyTokenService.validAccessToken(String userId)`  
-**Takes in:** `authentication.getName()`, which is based on Spotify's configured `user-name-attribute: id`.  
-**Does:** loads `SpotifyConnectionRepository.findById(userId)`; rejects a missing or `DISCONNECTED` connection; if expiry is more than 60 seconds away, decrypts the stored access ciphertext; otherwise calls `refresh(connection)`.  
-**Returns/passes next:** a raw access token for Spotify calls, or `ReauthRequiredException`.
-
-**Caller -> Callee:** `SpotifyTokenService.validAccessToken` -> `SpotifyTokenService.refresh(SpotifyConnection connection)`  
-**Takes in:** the stored connection with an encrypted refresh token.  
-**Does:** decrypts the refresh token, builds HTTP Basic auth from `SPOTIFY_CLIENT_ID:SPOTIFY_CLIENT_SECRET`, POSTs form data to `https://accounts.spotify.com/api/token`, reads `access_token`, optional replacement `refresh_token`, and `expires_in`, encrypts new tokens, calls `connection.updateTokens`, and saves it. On a 400 body containing `invalid_grant`, calls `connection.disconnect`, saves, and throws reauth-required.  
+**Caller -> Callee:** `validAccessToken` -> `SpotifyTokenService.refresh(SpotifyConnection connection)`  
+**Takes in:** a connected row with an encrypted refresh token.  
+**Does:** decrypts the refresh token; builds HTTP Basic auth from `SPOTIFY_CLIENT_ID:SPOTIFY_CLIENT_SECRET`; POSTs form data to Spotify `/api/token`; reads `access_token`, optional replacement `refresh_token`, and `expires_in`; encrypts new values; calls `connection.updateTokens(...)`; saves the row. A `400` body containing `invalid_grant` calls `connection.disconnect()`, saves the disconnected row, and requires login again.  
 **Returns/passes next:** the new raw access token or an exception.
 
-## 10. Spotify data is fetched in parallel
+## 9. `SpotifyClient` fetches five datasets in parallel
 
-**Caller -> Callee:** `WrapController.generate` -> `SpotifyClient.fetch(authentication)`  
-**Takes in:** the authenticated principal.  
-**Does:** resolves one token, then submits six tasks to `Executors.newVirtualThreadPerTaskExecutor()`. The token string, not the SecurityContext, is captured by each task.  
-**Returns/passes next:** after all required futures succeed, a `SpotifySnapshot`; on failure, all six futures are cancelled and the error propagates.
+**Caller -> Callee:** `SpotifyClient.fetch` -> five tasks submitted to `Executors.newVirtualThreadPerTaskExecutor()`  
+**Takes in:** the one raw bearer token.  
+**Does:** submits five independent operations. Each is wrapped by `timed(endpoint, operation)`, which logs endpoint name, duration, and success/failure. The token is captured by each task; no SecurityContext is required inside the task.  
+**Returns/passes next:** `await(...)` gathers every future into one `SpotifySnapshot`.
 
-Each task follows the same path:
+The HTTP calls share one long-lived `RestClient` backed by Apache HttpClient's `PoolingHttpClientConnectionManager`: maximum 50 connections total and 20 per route. The request factory sets a 2-second connection-request timeout and 15-second response timeout, evicts expired connections, and the `@PreDestroy shutdown()` method closes both the executor and HTTP client. This is connection reuse, not five new clients per request.
 
-| Caller -> callee | Spotify request | What is produced |
-|---|---|---|
-| `fetch` -> `profile(token)` | `GET /v1/me` | `Profile(display_name, first image URL)` |
-| `fetch` -> `savedTrackCounts(token)` | `GET /v1/me/tracks?limit=50&offset=N` until a page has fewer than 50 items | total saved count plus counts added in hard-coded years 2025 and 2026 |
-| `fetch` -> `topTracks(token,"long_term")` | `GET /v1/me/top/tracks?time_range=long_term&limit=50` | up to 50 mapped `Track` records |
-| `fetch` -> `topTracks(token,"short_term")` | same endpoint with `short_term` | up to 50 mapped `Track` records |
-| `fetch` -> `topArtists(token)` | `GET /v1/me/top/artists?time_range=long_term&limit=50` | up to 50 mapped `Artist` records |
-| `fetch` -> `recentlyPlayed(token)` | `GET /v1/me/player/recently-played?limit=50` | valid `PlayedTrack(track, playedAt)` records |
+| Task | Callee | Spotify request | Mapped output |
+| --- | --- | --- | --- |
+| 1 | `profile(token)` | `GET /v1/me` | `SpotifySnapshot.Profile(display_name, first image URL)` |
+| 2 | `topTracks(token, "long_term")` | `GET /v1/me/top/tracks?time_range=long_term&limit=50` | up to 50 `Track` records |
+| 3 | `topTracks(token, "short_term")` | same endpoint with `short_term` | up to 50 `Track` records |
+| 4 | `topArtists(token)` | `GET /v1/me/top/artists?time_range=long_term&limit=50` | up to 50 `Artist` records |
+| 5 | `recentlyPlayed(token)` | `GET /v1/me/player/recently-played?limit=50` | valid `PlayedTrack(track, playedAt)` records |
 
-`get(token,path)` sets a Bearer token and parses JSON. HTTP 429 is retried up to three attempts with sleeps of 200 ms and 400 ms; it does not inspect `Retry-After`. Other response/network/invalid-body errors become `SpotifyException`, marked retryable for the current exception mapping. `await(Future<T>)` unwraps runtime causes, restores interrupt status on interruption, and converts non-runtime causes to a temporary Spotify error.
+There is no current `/v1/me/tracks` call and no saved-library-count calculation in this code path.
 
-Mapping is done by `artist(JsonNode)`, `track(JsonNode)`, and `image(JsonNode)`. A track keeps only the first Spotify artist, duration, album ID/name, and first album image. Invalid recent timestamps are skipped. Missing saved `added_at` values are skipped instead of invented.
+**Caller -> Callee:** each task -> `SpotifyClient.get(String token, String path)`  
+**Takes in:** bearer token and relative API path.  
+**Does:** performs the GET, sets `Authorization: Bearer ...`, parses an object JSON response, and retries HTTP `429` up to three attempts with 200 ms then 400 ms sleeps. It does not read `Retry-After`. Invalid bodies, network errors, and exhausted rate limits become `SpotifyException`.  
+**Returns/passes next:** a `JsonNode` to the endpoint mapper.
 
-## 11. The snapshot is analyzed
+`track(JsonNode)` keeps the first artist, duration, album id/name, and first album image. `artist(JsonNode)` copies id, name, genres, and first image. Invalid `played_at` timestamps are skipped by `recentlyPlayed`.
+
+If a future fails, `fetch` cancels all five futures and rethrows. `await` restores interrupt status on interruption and unwraps runtime causes.
+
+## 10. The snapshot is analyzed
 
 **Caller -> Callee:** `WrapController.generate` -> `AnalyticsService.analyze(SpotifySnapshot snapshot)`  
-**Takes in:** the assembled profile, saved counts, long/short top tracks, long-term artists, and recent plays.  
-**Does:** null-protects lists, deduplicates/sorts recent plays, takes the first five long-term tracks and artists, and computes every `WrapResult` field.  
-**Returns/passes next:** a `WrapResult` containing UI data and `Metric` availability/notes.
+**Takes in:** profile, long-term tracks, short-term tracks, long-term artists, and recent plays.  
+**Does:** replaces null lists with empty lists, deduplicates recent events by `track id|playedAt`, sorts them by timestamp, limits displayed top tracks/artists to five, and computes each response field.  
+**Returns/passes next:** a `WrapResult` for the 13-slide UI.
 
-Inside `analyze`, the exact calculations are:
+The calculations are:
 
-- `libraryGrowth(snapshot)`: compares `savedTracks2025` and `savedTracks2026`, sets trend to `growth`, `decline`, or `tie`, and always marks the result available.
-- `estimatedTime(recent)`: `deduplicateRecent` removes null track/time events and duplicates by `track id|playedAt`, sorts ascending, then accepts adjacent gaps only when positive and no more than current duration + `LISTENING_GAP_TOLERANCE_MS` (30,000 ms). It adds the smaller of gap and duration. Fewer than two usable events or zero total produces `available=false`.
-- `estimatedYearListeningTime(recent, LocalDate.now(ZoneOffset.UTC))`: groups the same plausible intervals by UTC day, averages observed daily milliseconds, and projects through December 1; after December 1 it projects through the actual year length. It is explicitly an estimate, not verified annual Spotify listening time.
-- `totalTracksListened` and `totalAlbumsListened`: count distinct non-null recent track IDs and album IDs.
-- `genres(artists)`: counts each distinct genre once per artist, sorts by descending count then genre name, and limits to five. Note: the record is placed in `topGenres` but `WrapResult` annotates that field with `@JsonIgnore`, so it is not sent in the JSON response.
-- `hiddenGems(longTracks, shortTracks)`: returns up to five long-term tracks whose IDs are absent from the short-term set.
-- `diversity(longTracks)`: groups valid tracks by artist ID and computes normalized Shannon entropy as a percent. One artist is 0%; no valid tracks is unavailable.
-- `evolution(longTracks, shortTracks)`: computes `100 * (1 - intersection/union)` of track-ID sets. Empty union is unavailable.
-- `replay(recent)`: computes `(valid event count - distinct track count) / valid event count * 100`; it is repeat intensity in this sample, not actual Spotify play counts.
+- `estimatedTime(events)`: accepts an adjacent interval only when it is positive and no more than the current track duration plus `LISTENING_GAP_TOLERANCE_MS` (30 seconds); adds the smaller of gap and duration. Otherwise it returns an unavailable metric.
+- `estimatedYearListeningTime(events, LocalDate.now(UTC))`: estimates each observed UTC day's usable milliseconds, averages those days, and projects through December 1 (or the actual year length after December 1). It is explicitly an estimate.
+- `listeningRoutine(recent)`: counts UTC hours and UTC weekdays; ties prefer the later key because of the comparator.
+- `comfortArtist(recent)`: groups recent artists by id, or name when id is absent, and returns the largest group and its share.
+- `totalTracksListened` / `totalAlbumsListened`: distinct non-null ids in the recent sample.
+- `genres(artists)`: counts each distinct raw genre once per artist, sorts by count descending then name, and keeps five. The result is stored in `WrapResult.topGenres` but `@JsonIgnore` means it is not in HTTP JSON.
+- `hiddenGems(longTracks, shortTracks)`: up to five long-term tracks whose ids are absent from short-term tracks.
+- `diversity(longTracks)`: normalized Shannon entropy of valid artist-id counts, expressed as a percent; one artist is 0%.
+- `tasteChanges(longTracks, shortTracks)`: Jaccard difference `100 * (1 - intersection/union)` plus the count of short-term ids absent from long-term ids.
+- `replay(recent)`: `(valid event count - distinct track count) / valid event count * 100`; this is repeat intensity in the returned sample, not Spotify play counts.
 
-`normalizeGenre(String)` maps strings containing rap/hip hop/trap to `Hip-Hop`, pop to `Pop`, rock to `Rock`, electro/dance to `Electronic`, and everything else to `Other`. The legacy `WrapResult` compatibility methods `albumConcentration`, `risingStar`, `artistLoyalty`, `familiarityRatio`, and `discoveryRatio` return `0`/`null`; `personality()` returns a fixed `Personality("WRAP", "Your Wrap", ...)`.
+`normalizeGenre` is a public compatibility helper that maps rap/hip-hop/trap to `Hip-Hop`, pop to `Pop`, rock to `Rock`, electro/dance to `Electronic`, and everything else to `Other`. `WrapResult` also keeps older compatibility accessors; `albumConcentration`, `artistLoyalty`, `familiarityRatio`, and `discoveryRatio` currently return `0`, `risingStar` returns `null`, and `personality()` returns a fixed `Personality("WRAP", "Your Wrap", ...)`.
 
-## 12. The HTTP response is returned
+## 11. The response is cached and returned
 
 **Caller -> Callee:** `AnalyticsService.analyze` -> `WrapController.generate`  
 **Takes in:** `WrapResult`.  
-**Does:** attempts Redis serialization/write, ignoring cache-write failures.  
-**Returns/passes next:** `ResponseEntity.ok(result)`, serialized by Jackson as JSON.
+**Does:** when caching is enabled, serializes the result with Jackson and calls `redis.opsForValue().set(key, json, cacheTtl)`. A cache-write error is ignored because Redis is an optional performance cache.  
+**Returns/passes next:** `ResponseEntity.ok(result)`, serialized as JSON by Spring MVC.
 
-Error outcomes in `WrapController.generate` are explicit: `ReauthRequiredException` -> 401 `{code:reauth_required,...}`; `SpotifyException` -> 502 `{code:spotify_error,...}`; any other exception -> 500 `{code:generation_failed,...}`. `ApiExceptionHandler` also declares mappings for the same exception types, but `WrapController` catches them locally, so this endpoint's local responses normally win.
+The controller's local error mapping is:
 
-The browser renders the JSON into 13 cards in `wrap.html`, formats metric units, escapes text with `esc`, hides broken images, and enables previous/next carousel buttons. It does not display `topGenres`, and the current implementation starts generation on every `/wrap` page load rather than checking `autogenerate` itself.
+- `ReauthRequiredException` -> `401`, `{code:"reauth_required", message:...}`
+- `SpotifyException` -> `502`, `{code:"spotify_error", message:...}`
+- any other exception -> `500`, `{code:"generation_failed", message:"We could not generate your wrap. Please try again."}`
 
+`ApiExceptionHandler` declares separate advice mappings, but `WrapController.generate` catches these exceptions itself, so the controller's response normally wins for this endpoint.
+
+## 12. The browser renders the 13 slides
+
+**Caller -> Callee:** `wrap.html` `generate()` -> `render(data)` -> `activate()`  
+**Takes in:** JSON response.  
+**Does:** hides the loading panel, builds 13 story cards from profile, top tracks/artists, counts, time estimates, routine, comfort artist, taste changes, hidden gems, diversity, replay, and outro; escapes text with `esc`, hides broken images, and wires previous/next buttons.  
+**Returns/passes next:** the completed Wrap page in the browser.
+
+If the response is `401`, the page tells the user to reconnect Spotify. Other non-2xx responses show the server message when present. A query-string `oauth_error=spotify_rate_limited` gets a specific rate-limit message; other OAuth errors get a generic reconnect message.
