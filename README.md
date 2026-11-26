@@ -1,80 +1,197 @@
-# Spotify Analytics Platform V2
+# Spotify Analytics Platform
 
-This is a synchronous Spring Boot modular monolith for generating Spotify listening analytics.
+An on-demand Spotify listening story built with Spring Boot, Java 21, and a small browser UI.
+
+Connect Spotify, click **Reveal my wrap**, and the app pulls a fresh snapshot of your current listening data, turns it into a set of analytics, and presents the result as a 13-slide story. The project is deliberately small enough to follow from the browser click all the way to the Spotify API call, but it still includes the pieces that matter in a real service: OAuth, encrypted token storage, CSRF protection, Redis caching, HTTP connection pooling, parallel I/O, timeouts, retries, and load-test support.
+
+## What it does
+
+- Connects a Spotify account with OAuth 2.0 and keeps the access/refresh tokens encrypted in PostgreSQL.
+- Fetches the Spotify profile, long-term and short-term top tracks, long-term top artists, and recently played tracks.
+- Runs the five independent Spotify reads concurrently on Java 21 virtual threads.
+- Reuses connections through a pooled Apache HttpClient (`50` total connections, `20` per route).
+- Calculates listening time estimates, annualized listening time, top tracks/artists, unique tracks/albums, listening routine, comfort artist, hidden gems, taste diversity, taste changes, and replay intensity.
+- Caches each user's generated Wrap in Redis for 15 minutes by default.
+- Provides `PERFORMANCE_DISABLE_WRAP_CACHE=true` for measuring the real generation path during load tests.
+- Returns useful failure states when Spotify is rate-limiting, a token needs reauthentication, or recent data is too sparse for a metric.
+
+## A quick look at the request path
+
+```text
+Browser
+  -> Spring Security (session + OAuth2 + CSRF)
+  -> WrapController
+  -> Redis cache (user-specific, optional)
+  -> SpotifyTokenService (decrypt or refresh token)
+  -> SpotifyClient (five parallel calls through one pooled HTTP client)
+  -> SpotifySnapshot
+  -> AnalyticsService
+  -> WrapResult JSON
+  -> 13-slide browser UI
+```
+
+The request is synchronous: the browser waits for the complete result. There is no queue, scheduled job, or background worker. A warm Redis hit returns before any Spotify call is made.
+
+## Analytics in the Wrap
+
+The calculations are intentionally transparent and sample-based:
+
+- Recent listening time uses plausible gaps between consecutive Spotify timestamps and caps each gap at the current track duration.
+- Annual listening time averages usable observed UTC days and projects that average through the early-December Wrap date.
+- Taste diversity is normalized Shannon entropy across artists in the long-term top-track sample.
+- Taste changes compare long-term and short-term track-id sets with a Jaccard-style difference.
+- Replay intensity measures repetition in the recent sample; it is not Spotify's lifetime play count.
+- Missing or insufficient data produces an unavailable metric with a reason instead of an invented number.
+
+## Stack
+
+- Java 21
+- Spring Boot 3.2.5
+- Spring MVC + Thymeleaf
+- Spring Security OAuth2 Client
+- Spring Data JPA + Flyway
+- PostgreSQL 15
+- Redis 7
+- Apache HttpClient 5
+- Docker Compose
+- k6 load-test script
 
 ## Run locally
 
-1. Start PostgreSQL and Redis. Docker downloads each image only the first time; later runs reuse the local images and containers:
+### Prerequisites
 
-   ```bash
-   docker compose up -d postgres redis
-   ```
+- Java 21
+- Docker Desktop (for PostgreSQL and Redis)
+- A Spotify Developer application
+- Git Bash if you want to use the commands below exactly as written
 
-2. In Git Bash, export the required environment variables. These are Git Bash commands, not PowerShell commands:
+### 1. Start the local services
 
-   ```bash
-   export SPOTIFY_CLIENT_ID='your-client-id'
-   export SPOTIFY_CLIENT_SECRET='your-client-secret'
-   export SPOTIFY_REDIRECT_URI='http://127.0.0.1:8080/login/oauth2/code/spotify'
-   export TOKEN_ENCRYPTION_KEY="$(openssl rand -base64 32)"
-   ```
+```bash
+docker compose up -d postgres redis
+```
 
-   Keep the same encryption key when restarting an existing local database. The local Compose database is exposed on port `55432` to avoid collisions with an existing PostgreSQL installation.
+PostgreSQL is exposed on `localhost:55432`; Redis is exposed on `localhost:6379`. The PostgreSQL data is kept in the named `postgres-data` volume.
 
-3. Point `DATABASE_URL`, `DATABASE_USERNAME`, and `DATABASE_PASSWORD` at PostgreSQL/Supabase. Flyway creates the `spotify_users` table on startup.
+### 2. Configure Spotify and token encryption
 
-4. Register this exact callback URL with Spotify:
+Register this callback URL in the Spotify Developer Dashboard:
 
-   `http://127.0.0.1:8080/login/oauth2/code/spotify`
+```text
+http://127.0.0.1:8080/login/oauth2/code/spotify
+```
 
-5. Run:
+Then export the values in the same shell that will run Maven:
 
-   ```bash
-   ./mvnw spring-boot:run
-   ```
+```bash
+export SPOTIFY_CLIENT_ID='your-client-id'
+export SPOTIFY_CLIENT_SECRET='your-client-secret'
+export SPOTIFY_REDIRECT_URI='http://127.0.0.1:8080/login/oauth2/code/spotify'
+export TOKEN_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+```
 
-Open `http://127.0.0.1:8080`, connect Spotify, and click **Generate My Wrap**. Generation is synchronous: the endpoint reads a user-specific Redis cache first, fetches Spotify data on a miss, calculates the analytics, caches the JSON for the configured TTL (15 minutes by default), and returns the result. Reloading the page still makes one request to the application, but a valid Redis entry prevents the Spotify APIs from being called again.
+Keep the same `TOKEN_ENCRYPTION_KEY` when restarting an existing local database. Changing it makes previously stored Spotify ciphertext impossible to decrypt.
 
-## Verification
+The local defaults already point to the Compose services, so you only need to override the database or Redis variables if you are using different services.
+
+### 3. Start the app
+
+```bash
+./mvnw spring-boot:run
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080), connect Spotify, and reveal your Wrap.
+
+Flyway creates the `spotify_users` table at startup. Hibernate validates that schema rather than creating tables itself.
+
+## Environment variables
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `SPOTIFY_CLIENT_ID` | yes | - | Spotify OAuth client id |
+| `SPOTIFY_CLIENT_SECRET` | yes | - | Spotify OAuth client secret |
+| `SPOTIFY_REDIRECT_URI` | yes | `http://127.0.0.1:8080/login/oauth2/code/spotify` | OAuth callback registered with Spotify |
+| `TOKEN_ENCRYPTION_KEY` | yes | - | Base64 key that decodes to exactly 32 bytes |
+| `DATABASE_URL` | no locally | `jdbc:postgresql://localhost:55432/spotify_analytics` | PostgreSQL JDBC URL |
+| `DATABASE_USERNAME` | no locally | `postgres` | PostgreSQL username |
+| `DATABASE_PASSWORD` | no locally | `postgres` | PostgreSQL password |
+| `REDIS_URL` | no locally | `redis://localhost:6379` | Redis connection URL |
+| `WRAP_CACHE_TTL` | no | `15m` | Redis TTL for generated Wrap JSON |
+| `PERFORMANCE_DISABLE_WRAP_CACHE` | no | `false` | Skip Redis reads/writes when `true` |
+| `THYMELEAF_CACHE` | no | `true` | Thymeleaf template caching |
+| `PORT` | no | `8080` | HTTP server port |
+
+`.env.example` contains the local variable names and safe placeholders. Secrets are not committed to the repository.
+
+## API surface
+
+| Method | Route | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/` | public | Home page |
+| `GET` | `/api/me` | public | Reports whether the current session is connected to Spotify |
+| `GET` | `/oauth2/authorization/spotify` | public | Starts Spotify OAuth |
+| `GET` | `/api/csrf` | public | Returns the CSRF token used by the browser |
+| `GET` | `/wrap` | public | Wrap page shell |
+| `POST` | `/wraps` | authenticated + CSRF | Reads/cache-generates the current user's Wrap |
+| `GET` | `/actuator/health` | public | Health check |
+
+`POST /wraps` returns `401` when the connection needs to be restored, `502` for Spotify/upstream failures, and `500` for an unexpected generation error.
+
+## Load testing the generation path
+
+The cache is useful for normal browsing, but it hides the work you may want to measure. Set this before starting the app:
+
+```bash
+export PERFORMANCE_DISABLE_WRAP_CACHE=true
+./mvnw spring-boot:run
+```
+
+The repository includes [`performance/k6/uncached-wrap.js`](performance/k6/uncached-wrap.js). It expects an authenticated session cookie and CSRF token because OAuth is intentionally kept out of the load script:
+
+```bash
+k6 run \
+  -e BASE_URL=http://127.0.0.1:8080 \
+  -e SESSION_COOKIE='your-session-cookie' \
+  -e CSRF_TOKEN='your-csrf-token' \
+  -e VUS=5 \
+  -e ITERATIONS=20 \
+  performance/k6/uncached-wrap.js
+```
+
+The script defaults to one virtual user, 20 iterations, a one-second pause between requests, and thresholds of p50 under 10 seconds and p95 under 15 seconds. Spotify rate limits and the account's available recent data still affect the result.
+
+## Verify the project
 
 ```bash
 ./mvnw test
 ```
 
-To stop the containers without deleting their data:
+The test suite covers application startup, AES-GCM token round trips and nonce uniqueness, genre normalization, ranking compatibility, taste-change math, and analytics fixture behavior. It does not call the live Spotify API.
+
+## Stop and restart local services
 
 ```bash
-docker compose stop
+docker compose stop    # stop containers, keep data
+docker compose start   # start them again
 ```
 
-To start them again:
+Use `docker compose down` when you want to remove the containers. The named PostgreSQL volume remains unless you explicitly remove it.
 
-```bash
-docker compose start
-```
+## Deployment
 
-The named `postgres-data` volume keeps the local database across container restarts and `docker compose down`. Remove it only when you intentionally want a fresh database.
+The root [`Dockerfile`](Dockerfile) builds the application with Maven and runs it on Eclipse Temurin 21 as a non-root `spring` user. It listens on the `PORT` supplied by the platform.
 
-The test suite covers application startup, AES-256-GCM token round trips with unique nonces, genre normalization, rankings, recent listening minutes, album selection, and personality output.
+For Render or another container host, provide the Spotify credentials, a stable 32-byte Base64 encryption key, PostgreSQL connection details, and Redis URL. Point the health check at `/actuator/health`, and register the deployed value of `SPOTIFY_REDIRECT_URI` in Spotify's dashboard.
 
-Required production variables are `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`, `DATABASE_URL`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `REDIS_URL`, and a base64-encoded 32-byte `TOKEN_ENCRYPTION_KEY`.
+Redis is a performance cache, not durable application storage. Losing it after a restart is expected; the next Wrap simply fetches Spotify data again. PostgreSQL stores the encrypted connection state.
 
-## Deploy on Render
+## Current scope
 
-Create a Render Web Service from this repository and choose the Docker runtime. Render will build the root `Dockerfile` and run the image on the port supplied by `PORT`.
+This version intentionally works with a bounded Spotify sample: the four collection endpoints request up to 50 items each, alongside one profile request. It does not fetch saved-library tracks, build a Wrap history table, paginate these endpoints, or run generation as a background job. Those limits keep the request path understandable and make the performance characteristics easier to measure.
 
-Set the health check path to `/actuator/health` and configure these environment variables in Render:
+## Documentation
 
-- `SPOTIFY_CLIENT_ID`
-- `SPOTIFY_CLIENT_SECRET`
-- `SPOTIFY_REDIRECT_URI` (for example, `https://your-service.onrender.com/login/oauth2/code/spotify`)
-- `TOKEN_ENCRYPTION_KEY` (base64-encoded 32-byte key)
-- `DATABASE_URL` (JDBC PostgreSQL URL from Supabase)
-- `DATABASE_USERNAME`
-- `DATABASE_PASSWORD`
-- `REDIS_URL` (the Render Key Value internal Redis URL)
-- `THYMELEAF_CACHE=true`
-
-Register the exact value of `SPOTIFY_REDIRECT_URI` in the Spotify Developer Dashboard. Use Supabase's Session Pooler connection details when Render cannot reach the direct IPv6 database endpoint; the JDBC URL must use the `jdbc:postgresql://` format.
-
-The free Render web service can sleep after inactivity, so the first request after idle may be slow. Redis is only a cache: losing it after a restart is expected and causes Wraps to be regenerated.
+- [`docs/A-Z-WALKTHROUGH.md`](docs/A-Z-WALKTHROUGH.md) - complete request trace from browser click to JSON response
+- [`docs/ARCHITECTURE-AND-FLOWS.md`](docs/ARCHITECTURE-AND-FLOWS.md) - system shape, security, storage, caching, pooling, and concurrency
+- [`docs/CLASS-AND-FUNCTION-REFERENCE.md`](docs/CLASS-AND-FUNCTION-REFERENCE.md) - class-by-class responsibilities and call relationships
+- [`docs/INTERVIEW-QUICK-RECALL.md`](docs/INTERVIEW-QUICK-RECALL.md) - concise explanations of design choices, trade-offs, and edge cases
